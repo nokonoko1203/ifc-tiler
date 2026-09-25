@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>ifc2tiles LOD bench</title>
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Cesium.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>html, body, #viewer { margin: 0; width: 100%; height: 100%; }</style>
+</head>
+<body>
+  <div id="viewer"></div>
+  <script>
+    // /viewer/lod.html?tileset=...&dist=30
+    // 指定距離（boundingSphere半径の倍数）にカメラを固定してから読み込み、選ばれたタイルを数える。
+    // 結果は window.lodResult。描画ループは手動（ペイン非表示でも計測できるように）。
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      const q = new URLSearchParams(location.search);
+      const viewer = new Cesium.Viewer("viewer", {
+        baseLayer: false, baseLayerPicker: false, geocoder: false, timeline: false, animation: false,
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(), useDefaultRenderLoop: false,
+      });
+      const tileset = await Cesium.Cesium3DTileset.fromUrl(q.get("tileset"));
+      const k = Number(q.get("dist") ?? 3);
+      const R = tileset.boundingSphere.radius;
+      viewer.camera.viewBoundingSphere(tileset.boundingSphere, new Cesium.HeadingPitchRange(0.6, -0.45, R * k));
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      viewer.scene.primitives.add(tileset);
+      let n = 0;
+      do { viewer.render(); n++; await sleep(15); } while ((!tileset.tilesLoaded || n < 10) && n < 1000);
+      for (let i = 0; i < 5; i++) viewer.render();
+      const fn = viewer.scene.frameState.frameNumber;
+      let tiles = 0, features = 0, gpu = 0, loaded = 0;
+      const visit = (t) => {
+        if (t.content && t.contentReady) loaded++;
+        if (t._selectedFrame === fn && t.content) { tiles++; features += t.content.featuresLength || 0; gpu += (t.content.geometryByteLength || 0) + (t.content.batchTableByteLength || 0); }
+        t.children.forEach(visit);
+      };
+      visit(tileset.root);
+      window.lodResult = {
+        distFactor: k, distM: Math.round(Cesium.Cartesian3.distance(viewer.camera.positionWC, tileset.boundingSphere.center)),
+        selectedTiles: tiles, loadedTiles: loaded, features, gpuMB: +(gpu / 1e6).toFixed(2), frames: n,
+      };
+    })().catch((e) => { window.lodResult = { error: String(e) }; });
+  </script>
+</body>
+</html>

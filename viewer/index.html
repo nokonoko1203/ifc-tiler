@@ -26,10 +26,12 @@
     document.getElementById("src").textContent = tilesetUrl;
 
     const viewer = new Cesium.Viewer("viewer", {
-      baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })),
+      // 背景地図は付けない（外部タイルはCORSやネットワークに左右されるため）
+      baseLayer: false,
       baseLayerPicker: false, geocoder: false, timeline: false, animation: false,
       terrainProvider: new Cesium.EllipsoidTerrainProvider(),
     });
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#3a4a3a");
     viewer.scene.globe.depthTestAgainstTerrain = true;
     window.viewer = viewer;
 

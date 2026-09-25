@@ -1,7 +1,10 @@
 [workspace]
 resolver = "3"
-members = []
+members = ["crates/ifc2tiles"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.95"
+
+[profile.release]
+debug = false
