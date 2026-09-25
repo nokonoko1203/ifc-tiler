@@ -8,9 +8,9 @@ publish = false
 
 [dependencies]
 # 版は公開から3日以上たったものを完全一致で固定する（scripts/check-crate-age.py で検査）
-ifc-lite-core = "=16.2.0"
-ifc-lite-processing = "=16.2.0"
-ifc-lite-export = "=16.2.0"
+ifc-lite-core = "=17.3.0"
+ifc-lite-processing = "=17.3.0"
+ifc-lite-export = "=17.3.0"
 jprect = "=0.1.0"
 japan-geoid = { version = "=0.6.0", features = ["gsigeo2011", "jpgeo2024_hrefconv2024"] }
 geocentric = "=0.1.3"

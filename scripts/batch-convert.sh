@@ -21,12 +21,14 @@ while IFS= read -r -d '' f; do
     python3 -c "import json,sys; print(json.dumps({'file': sys.argv[1], 'ok': False, 'exit': int(sys.argv[3]), 'error': open(sys.argv[2]).read()[-300:]}, ensure_ascii=False))" "$f" "$out.log" "$code"
     continue
   fi
-  errs=$(scripts/validate-tiles.sh "$out/tileset.json" | grep -o '"numErrors": [0-9]*' | grep -o '[0-9]*$')
-  python3 - "$f" "$out" "$mode" "$errs" "$out.log" <<'PY'
+  v=$(scripts/validate-tiles.sh "$out/tileset.json")
+  errs=$(echo "$v" | grep -o '"numErrors": [0-9]*' | head -1 | grep -o '[0-9]*$')
+  warns=$(echo "$v" | grep -o '"numWarnings": [0-9]*' | head -1 | grep -o '[0-9]*$')
+  python3 - "$f" "$out" "$mode" "$errs" "$out.log" "$warns" <<'PY'
 import json, sys, os
-f, out, mode, errs, log = sys.argv[1:]
+f, out, mode, errs, log, warns = sys.argv[1:]
 r = json.load(open(os.path.join(out, "ifc2tiles-report.json")))
-print(json.dumps({"file": f, "ok": True, "mode": mode, "validator_errors": int(errs), "elements": r["elements"], "excluded": r["excluded"],
+print(json.dumps({"file": f, "ok": True, "mode": mode, "validator_errors": int(errs), "validator_warnings": int(warns), "elements": r["elements"], "excluded": r["excluded"],
   "without_mesh": r["withoutMesh"], "columns": r["columns"], "tiles": len(r["tiles"]), "bytes": r["totalBytes"],
   "ms": r["timingMs"], "warnings": r["warnings"], "source": r["conversion"]["source"], "placement": r["conversion"]["placement"]["kind"]}, ensure_ascii=False))
 PY
