@@ -80,31 +80,29 @@ impl Projector {
         }
     }
 
-    pub fn to_ecef(&self, p: [f64; 3]) -> [f64; 3] {
+    /// 局所座標 [m] → ECEF [m]。地図座標が投影の定義域外なら、その地図座標を返す。
+    pub fn to_ecef(&self, p: [f64; 3]) -> Result<[f64; 3], [f64; 3]> {
         match (&self.placement, &self.enu) {
-            (Placement::Enu(e), Some(frame)) => frame.to_ecef(e.to_enu(p)),
+            (Placement::Enu(e), Some(frame)) => Ok(frame.to_ecef(e.to_enu(p))),
             (Placement::Grid(g), _) => {
                 let [east, north, h] = g.to_map(p);
-                let (lon, lat, _) = g
-                    .zone
-                    .projection()
-                    .project_inverse(east, north, 0.0)
-                    .expect("平面直角座標の逆投影は定義域全体で成り立つ");
-                geodetic(lat, lon, h + self.geoid_height(lon, lat))
+                let (lon, lat, _) =
+                    g.zone.projection().project_inverse(east, north, 0.0).map_err(|_| [east, north, h])?;
+                Ok(geodetic(lat, lon, h + self.geoid_height(lon, lat)))
             }
             (Placement::Enu(_), None) => unreachable!("ENUのフレームはnewで作る"),
         }
     }
 
     /// 点`c`の近くで、局所座標の向きを`frame`の座標の向きへ移す回転（列が局所x・y・z軸の行き先）。
-    pub fn rotation_at(&self, c: [f64; 3], frame: &Frame) -> [[f64; 3]; 3] {
-        let o = frame.to_local(self.to_ecef(c));
+    pub fn rotation_at(&self, c: [f64; 3], frame: &Frame) -> Result<[[f64; 3]; 3], [f64; 3]> {
+        let o = frame.to_local(self.to_ecef(c)?);
         let axis = |i: usize| {
             let mut q = c;
             q[i] += 1.0;
-            sub(frame.to_local(self.to_ecef(q)), o)
+            self.to_ecef(q).map(|e| sub(frame.to_local(e), o))
         };
-        orthonormalize([axis(0), axis(1), axis(2)])
+        Ok(orthonormalize([axis(0)?, axis(1)?, axis(2)?]))
     }
 }
 
@@ -218,7 +216,7 @@ mod tests {
     #[test]
     fn grid_known_point_matches_gsi() {
         let p = Projector::new(grid(), GeoidModel::Jpgeo2024);
-        let got = p.to_ecef([0.0, 0.0, 0.0]);
+        let got = p.to_ecef([0.0, 0.0, 0.0]).unwrap();
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
         // 国土地理院の値の丸め（0.1 mm、1e-6度≈0.1 m）を踏まえ、1 cm以内
         assert!(dist(got, want) < 0.15, "{}", dist(got, want));
@@ -235,7 +233,7 @@ mod tests {
         });
         let p = Projector::new(e, GeoidModel::Jpgeo2024);
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
-        assert!(dist(p.to_ecef([0.0; 3]), want) < 1e-3);
+        assert!(dist(p.to_ecef([0.0; 3]).unwrap(), want) < 1e-3);
     }
 
     #[test]
@@ -267,8 +265,8 @@ mod tests {
         // IX系の既知点（中央子午線の西）では子午線収差が0.038616667°。
         // 地図の東（局所+X）は、真東から反時計回り（北寄り）にその角度だけ回っている
         let p = Projector::new(grid(), GeoidModel::None);
-        let frame = Frame::at_ecef(p.to_ecef([0.0; 3]));
-        let r = p.rotation_at([0.0; 3], &frame);
+        let frame = Frame::at_ecef(p.to_ecef([0.0; 3]).unwrap());
+        let r = p.rotation_at([0.0; 3], &frame).unwrap();
         let angle = r[0][1].atan2(r[0][0]).to_degrees();
         assert!((angle - 0.038616667).abs() < 1e-5, "{angle}");
         let n = rotate(&r, [0.0, 0.0, 1.0]);
