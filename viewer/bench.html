@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>ifc2tiles metadata bench</title>
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Cesium.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>html, body, #viewer { margin: 0; width: 100%; height: 100%; }</style>
+</head>
+<body>
+  <div id="viewer"></div>
+  <script>
+    // /viewer/bench.html?tileset=/out/metabench/f2000_c100/tileset.json
+    // 結果は window.benchResult に入る。描画ループは手動で回す（ペイン非表示でも計測できるように）。
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    window.benchResult = null;
+    (async () => {
+      const url = new URLSearchParams(location.search).get("tileset");
+      const viewer = new Cesium.Viewer("viewer", {
+        baseLayer: false, baseLayerPicker: false, geocoder: false, timeline: false, animation: false,
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(), useDefaultRenderLoop: false,
+      });
+      window.viewer = viewer;
+      const heap0 = performance.memory ? performance.memory.usedJSHeapSize : null;
+      const t0 = performance.now();
+      const tileset = await Cesium.Cesium3DTileset.fromUrl(url);
+      viewer.scene.primitives.add(tileset);
+      window.tileset = tileset;
+      viewer.camera.viewBoundingSphere(tileset.boundingSphere, new Cesium.HeadingPitchRange(0, -0.6, tileset.boundingSphere.radius * 2.2));
+      let frames = 0;
+      while (!tileset.tilesLoaded || frames < 3) { viewer.render(); frames++; await sleep(10); if (performance.now() - t0 > 120000) break; }
+      const loadMs = performance.now() - t0;
+      const heap1 = performance.memory ? performance.memory.usedJSHeapSize : null;
+
+      // ピック（画面中央付近を走査して最初の feature）
+      const c = viewer.scene.canvas;
+      const tp = performance.now();
+      let feature = null;
+      for (let y = 0.3; y <= 0.7 && !feature; y += 0.1) for (let x = 0.3; x <= 0.7 && !feature; x += 0.1) {
+        const p = viewer.scene.pick(new Cesium.Cartesian2(c.clientWidth * x, c.clientHeight * y));
+        if (p instanceof Cesium.Cesium3DTileFeature) feature = p;
+      }
+      const pickMs = performance.now() - tp;
+      let propMs = null, propCount = 0;
+      if (feature) {
+        const t = performance.now();
+        const ids = feature.getPropertyIds();
+        for (const id of ids) feature.getProperty(id);
+        propMs = performance.now() - t; propCount = ids.length;
+      }
+      // スタイル適用（FLOAT64列があればその値で色分け）
+      const floatProp = feature?.getPropertyIds().find((id) => typeof feature.getProperty(id) === "number");
+      let styleMs = null;
+      if (floatProp) {
+        const ts = performance.now();
+        tileset.style = new Cesium.Cesium3DTileStyle({ color: { conditions: [[`\${${floatProp}} > 100`, "color('red')"], ["true", "color('white')"]] } });
+        for (let i = 0; i < 3; i++) { viewer.render(); await sleep(0); }
+        styleMs = performance.now() - ts;
+      }
+      window.benchResult = {
+        url, loadMs: Math.round(loadMs), frames, pickMs: Math.round(pickMs), picked: !!feature, propCount,
+        propMs: propMs && +propMs.toFixed(2), styleMs: styleMs && Math.round(styleMs),
+        heapDeltaMB: heap0 !== null ? +((heap1 - heap0) / 1048576).toFixed(1) : null,
+        tilesetMemMB: +(tileset.totalMemoryUsageInBytes / 1048576).toFixed(1),
+      };
+    })().catch((e) => { window.benchResult = { error: String(e) }; });
+  </script>
+</body>
+</html>

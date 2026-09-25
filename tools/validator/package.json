@@ -1,0 +1,11 @@
+{
+  "name": "ifc2tiles-validator",
+  "private": true,
+  "description": "3d-tiles-validator を固定版で実行するための補助パッケージ。sharp はインストールスクリプト不要の版へ差し替える。",
+  "dependencies": {
+    "3d-tiles-validator": "0.6.1"
+  },
+  "overrides": {
+    "sharp": "0.34.5"
+  }
+}

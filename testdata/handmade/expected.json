@@ -1,0 +1,37 @@
+{
+  "source": "国土地理院 測量計算サイト bl2xy、geoid calcgh（JPGEO2024）/ calcgh2011（GSIGEO2011）（2026-09-26取得）",
+  "crs": "EPSG:6677 (JGD2011 / Japan Plane Rectangular CS IX)",
+  "known_point": {
+    "latitude": 35.681236,
+    "longitude": 139.767125,
+    "x_north_m": -35363.2377,
+    "y_east_m": -5992.9196,
+    "grid_convergence_deg": 0.038616667,
+    "orthometric_height_m": 3.0,
+    "geoid_height_jpgeo2024_m": 36.7614,
+    "geoid_height_gsigeo2011_m": 36.6625,
+    "ellipsoidal_height_jpgeo2024_m": 39.7614,
+    "ellipsoidal_height_gsigeo2011_m": 39.6625
+  },
+  "zone9_origin": {
+    "latitude": 36.0,
+    "longitude": 139.83333333333334
+  },
+  "files": {
+    "ifc4_map_conversion.ifc": "立方体の局所原点が既知点。IfcMapConversion(Scale=0.001)",
+    "ifc2x3_plateau_origin.ifc": "IfcSite経緯度＝IX系原点。立方体は平面直角座標の値で配置",
+    "ifc2x3_site_latlon.ifc": "IfcSite経緯度＝既知点。RefElevation=3000mm（プロジェクト単位と解釈）"
+  },
+  "ifc4_map_conversion_semantics": {
+    "wall_Pset_WallCommon": {
+      "IsExternal": true,
+      "FireRating": "OCC-120",
+      "Reference": "WT-1",
+      "LoadBearing": false
+    },
+    "column_contained_in": "1階",
+    "column_referenced_in": "2階",
+    "desk_instances": 2,
+    "opening_rendered": false
+  }
+}

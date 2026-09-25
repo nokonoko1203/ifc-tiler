@@ -1,0 +1,82 @@
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/advanced-geometric-shape/basin-advanced-brep/basin-advanced-brep.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/advanced-geometric-shape/basin-faceted-brep/basin-faceted-brep.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/advanced-geometric-shape/basin-tessellation/basin-tessellation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/advanced-geometric-shape/bath-csg-solid/bath-csg-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/advanced-geometric-shape/cube-advanced-brep/cube-advanced-brep.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/alignment-geometries-and-linear-positioning/fixed-reference-swept-area-solid/fixed-reference-swept-area-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/alignment-geometries-and-linear-positioning/linear-placement-of-signal/linear-placement-of-signal.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/alignment-geometries-and-linear-positioning/sectioned-solid-horizontal/sectioned-solid-horizontal.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/alignment-geometries-and-linear-positioning/segmented-reference-curve/segmented-reference-curve.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/basic-geometric-shape/brep-model/brep-model.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/basic-geometric-shape/csg-primitive/csg-primitive.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/basic-geometric-shape/extruded-solid/extruded-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/basic-geometric-shape/surface-model/surface-model.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/basic-geometric-shape/triangulated-item/triangulated-item.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-extruded-solid/beam-extruded-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-parametric-cross-section/beam-parametric-cross-section.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-revolved-solid/beam-revolved-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-varying-cardinal-points/beam-varying-cardinal-points.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-varying-extrusion-paths/beam-varying-extrusion-paths.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/beam-varying-profiles/beam-varying-profiles.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/column-extruded-solid/column-extruded-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/reinforcing-assembly/reinforcing-assembly.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/reinforcing-stirrup/reinforcing-stirrup.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/slab-extrusion/slab-extruded-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/slab-openings/slab-openings.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/building-elements/wall-extrusion/wall-extruded-solid.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/construction-scheduling/construction-scheduling-task/construction-scheduling-task.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/mapped-geometric-shape/mapped-shape-with-multiple-items/mapped-shape-with-multiple-items.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/mapped-geometric-shape/mapped-shape-with-transformation/mapped-shape-with-transformation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/mapped-geometric-shape/mapped-shape-without-transformation/mapped-shape-without-transformation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/placements-and-gis-referencing/geographic-referencing-gk/geographic-referencing-gk.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/placements-and-gis-referencing/geographic-referencing-rigid-operation/geographic-referencing-rigid-operation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/placements-and-gis-referencing/geographic-referencing-utm/geographic-referencing-utm.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/placements-and-gis-referencing/grid-placement/grid-placement.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/structural-analysis-model/structural-curve-member/structural-curve-member.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape-with-style/tessellation-with-blob-texture/tessellation-with-blob-texture.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape-with-style/tessellation-with-image-texture/tessellation-with-image-texture.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape-with-style/tessellation-with-individual-colors/tessellation-with-individual-colors.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape-with-style/tessellation-with-pixel-texture/tessellation-with-pixel-texture.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape/beam-curved-i-shape-tessellated/beam-curved-i-shape-tessellated.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape/beam-straight-i-shape-tessellated/beam-straight-i-shape-tessellated.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape/column-straight-rectangle-tessellation/column-straight-rectangle-tessellation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape/polygonal-face-tessellation/polygonal-face-tessellation.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/tessellated-shape/slab-tessellated-unique-vertices/slab-tessellated-unique-vertices.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/trimmed-curve-parameters/curve-parameters-in-degrees/curve-parameters-in-degrees.ifc
+spec	buildingSMART/IFC4.x-specification-models	50e6c5c63a3586badc5dc857f5f4736675135525	models/trimmed-curve-parameters/curve-parameters-in-radians/curve-parameters-in-radians.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Architecture.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Hvac.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Structural.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Bridge.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Electrical.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Plumbing.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Rail.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Road.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/basin-tessellation.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/column-straight-rectangle-tessellation.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/tessellated-item.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/tessellation-with-individual-colors.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/wall-with-opening-and-window.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Architecture.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Hvac.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Structural.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Bridge.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Electrical.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Plumbing.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Rail.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Road.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Architecture.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Hvac.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Structural.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Bridge.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Electrical.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Landscaping.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Plumbing.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Rail.ifc
+cert	buildingSMART/Certification-datasets	80d976a9b193a26a8e928c3e79bff67af1de68a8	IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Road.ifc
+ifclite	LTplus-AG/ifc-lite	c49f20469c7b9a9da147bdbd60dd059d4774d342	BURKWIL_DX_B.ifc
