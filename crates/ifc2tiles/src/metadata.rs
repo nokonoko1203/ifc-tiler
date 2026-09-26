@@ -71,14 +71,15 @@ pub struct ElementRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Uint32,
-    Int64,
+    /// 整数。INT64はCesiumJSでBigIntとして返り、noData（JSONの数値）と一致しないため使わない。
+    Int32,
     Float64,
     Text,
     Logical,
 }
 
 pub const NO_DATA_F64: f64 = -9999.0;
-pub const NO_DATA_I64: i64 = i64::MIN;
+pub const NO_DATA_I32: i32 = i32::MIN;
 const LOGICAL_ENUM: &str = "IfcLogical";
 const LOGICAL_NOT_SET: u8 = 255;
 
@@ -110,11 +111,10 @@ impl Column {
                 p.insert("type".into(), "SCALAR".into());
                 p.insert("componentType".into(), "UINT32".into());
             }
-            Kind::Int64 => {
+            Kind::Int32 => {
                 p.insert("type".into(), "SCALAR".into());
-                p.insert("componentType".into(), "INT64".into());
-                // i64::MIN（−2^63）は倍精度でも正確に表せる
-                p.insert("noData".into(), NO_DATA_I64.into());
+                p.insert("componentType".into(), "INT32".into());
+                p.insert("noData".into(), NO_DATA_I32.into());
             }
             Kind::Float64 => {
                 p.insert("type".into(), "SCALAR".into());
@@ -302,11 +302,11 @@ fn encode_column(kind: Kind, values: &[Option<&Value>], add_view: &mut dyn FnMut
                 bytes.extend(n.to_le_bytes());
             }
         }
-        Kind::Int64 => {
+        Kind::Int32 => {
             for v in values {
                 let n = match v {
-                    Some(Value::Int(n)) => *n,
-                    _ => NO_DATA_I64,
+                    Some(Value::Int(n)) => i32::try_from(*n).expect("Int32の列の値は32ビットに収まる"),
+                    _ => NO_DATA_I32,
                 };
                 bytes.extend(n.to_le_bytes());
             }
@@ -351,8 +351,8 @@ fn encode_column(kind: Kind, values: &[Option<&Value>], add_view: &mut dyn FnMut
 fn infer_kind<'a>(values: impl Iterator<Item = &'a Value> + Clone) -> Kind {
     if values.clone().all(|v| matches!(v, Value::Logical(_))) {
         Kind::Logical
-    } else if values.clone().all(|v| matches!(v, Value::Int(_))) {
-        Kind::Int64
+    } else if values.clone().all(|v| matches!(v, Value::Int(n) if i32::try_from(*n).is_ok_and(|n| n != NO_DATA_I32))) {
+        Kind::Int32
     } else if values.clone().all(|v| matches!(v, Value::Int(_) | Value::Real(_))) {
         Kind::Float64
     } else {
@@ -466,7 +466,7 @@ mod tests {
         );
         let kind = |id: &str| t.columns.iter().find(|c| c.id == id).unwrap().kind;
         assert_eq!(kind("P__b"), Kind::Logical);
-        assert_eq!(kind("P__n"), Kind::Int64);
+        assert_eq!(kind("P__n"), Kind::Int32);
         assert_eq!(kind("P__m"), Kind::Float64);
         assert_eq!(kind("P__s"), Kind::Text);
         let s = t.columns.iter().position(|c| c.id == "P__s").unwrap();
@@ -533,6 +533,22 @@ mod tests {
     }
 
     #[test]
+    fn integers_outside_int32_become_float64() {
+        // INT64はCesiumJSでBigIntになり、noDataが効かないため使わない
+        let e = |id, n| element(id, vec![prop("P", "n", Value::Int(n), None)]);
+        let kind = |t: &Table| t.columns.iter().find(|c| c.id == "P__n").unwrap().kind;
+        let wide = Table::build(&[e(1, 1), e(2, 1 << 40)], &UnitScales::default(), true);
+        assert_eq!(kind(&wide), Kind::Float64);
+        let j = wide.columns.iter().position(|c| c.id == "P__n").unwrap();
+        assert_eq!(wide.rows[1][j], Some(Value::Real((1i64 << 40) as f64)));
+        // noDataと同じ値（i32::MIN）は区別できないのでFLOAT64にする
+        let min = Table::build(&[e(1, i64::from(i32::MIN))], &UnitScales::default(), true);
+        assert_eq!(kind(&min), Kind::Float64);
+        let max = Table::build(&[e(1, i64::from(i32::MAX))], &UnitScales::default(), true);
+        assert_eq!(kind(&max), Kind::Int32);
+    }
+
+    #[test]
     fn missing_values_use_no_data() {
         let t = Table::build(
             &[
@@ -554,7 +570,9 @@ mod tests {
             views.push(b);
             views.len() - 1
         });
-        assert_eq!(class["properties"]["P__i"]["noData"], NO_DATA_I64);
+        assert_eq!(class["properties"]["P__i"]["componentType"], "INT32");
+        assert_eq!(class["properties"]["P__i"]["noData"], NO_DATA_I32);
+        assert!(views.iter().any(|v| v[..] == [7i32.to_le_bytes(), NO_DATA_I32.to_le_bytes()].concat()));
         assert_eq!(class["properties"]["P__b"]["noData"], "NOT_SET");
         let f = views.iter().find(|v| v.len() == 16 && v[8..] == NO_DATA_F64.to_le_bytes()).is_some();
         assert!(f);

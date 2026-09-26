@@ -129,7 +129,7 @@ tileset全体で1つの`element`クラス。IDは`^[a-zA-Z_][a-zA-Z0-9_]*$`。
 ### 6.3 Pset / Qto の列
 
 - ID: `sanitize(Pset名) + "__" + sanitize(プロパティ名)`。`sanitize`は英数字と`_`以外を`_`に置換する。英数字が文字数の半分未満なら`p_` + FNV-1a 32bit（`"Pset名.プロパティ名"`）の16進8桁。先頭が数字なら`_`を前置。衝突したら`_` + ハッシュを後置。元の`"Pset名.プロパティ名"`は`name`に入れる（IDと同じなら省略）。
-- 型: 全部材の値を見て決める。すべて真偽値→ENUM `IfcLogical`（UINT8。FALSE=0、TRUE=1、UNKNOWN=2、NOT_SET=255、noData `NOT_SET`）。すべて整数→INT64（noData `i64::MIN`。−2^63は倍精度で正確に表せるのでJSONの数値で書く）。すべて数値→FLOAT64（noData −9999.0）。それ以外→STRING（noData `""`。空文字列を値なしとする）。固定列は`expressId`と`ifcClass`だけがrequiredで、ほかはSTRINGのnoData `""`。
+- 型: 全部材の値を見て決める。すべて真偽値→ENUM `IfcLogical`（UINT8。FALSE=0、TRUE=1、UNKNOWN=2、NOT_SET=255、noData `NOT_SET`）。すべて整数で、32ビットに収まり`i32::MIN`を含まない→INT32（noData `i32::MIN`）。収まらなければFLOAT64。INT64は使わない（CesiumJSはINT64の値を`BigInt`で返し、JSONの数値で書いたnoDataと一致しないため、値のない部材が`undefined`にならない。BLCJのサンプルで判明）。すべて数値→FLOAT64（noData −9999.0）。それ以外→STRING（noData `""`。空文字列を値なしとする）。固定列は`expressId`と`ifcClass`だけがrequiredで、ほかはSTRINGのnoData `""`。
 - 値の型: ifc-liteが文字列にした値を、値の型の名前で戻す。`IFCBOOLEAN`・`IFCLOGICAL`→真偽値、`IFCINTEGER`・`IFCCOUNTMEASURE`→整数、`LABEL`・`TEXT`・`IDENTIFIER`などの文字列型→文字列、それ以外で数値として読めるもの→数値。
 - 単位: 値の型（または数量の種類）が長さ・面積・体積・質量の測度なら、プロジェクト単位からSI（m、m²、m³、kg）へ換算する。換算した列の`description`に`unit: m`などを入れる。
 - 1タイルのproperty tableには、そのタイルに値が1つでもある列だけを書く。GLBのスキーマは、その列だけを持つ`element`クラス（スキーマIDはタイルごとに`ifc2tiles_<タイル名>`）。列のID・名前・型は全タイルで同じ。

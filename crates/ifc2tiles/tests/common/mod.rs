@@ -119,7 +119,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 _ => match def["componentType"].as_str().unwrap() {
                     "UINT32" => Value::from(u32::from_le_bytes(values[4 * i..4 * i + 4].try_into().unwrap())),
                     "FLOAT64" => Value::from(f64::from_le_bytes(values[8 * i..8 * i + 8].try_into().unwrap())),
-                    "INT64" => Value::from(i64::from_le_bytes(values[8 * i..8 * i + 8].try_into().unwrap())),
+                    "INT32" => Value::from(i32::from_le_bytes(values[4 * i..4 * i + 4].try_into().unwrap())),
                     other => panic!("{other}"),
                 },
             };
