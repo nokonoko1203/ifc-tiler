@@ -16,20 +16,20 @@ struct Cli {
     /// Output directory (tileset.json, tiles/)
     #[arg(short, long)]
     output: PathBuf,
-    /// CRS (e.g. EPSG:6677, or EPSG:6677+6695 to include a height reference). For map coordinates it overrides
-    /// the TargetCRS of IfcMapConversion (required with --map-conversion); for --origin and IfcSite it is the CRS of latitude, longitude and height
+    /// CRS, e.g. EPSG:6677, or EPSG:6677+6695 to include a height reference. For map coordinates it overrides
+    /// the TargetCRS of IfcMapConversion (required with --map-conversion); with --origin or IfcSite it is the CRS of the latitude, longitude and height
     #[arg(long, value_parser = crs)]
     crs: Option<String>,
     /// Ignore the file's georeferencing and place the model as east, north and height around this point (latitude,longitude[,elevation in m])
     #[arg(long, value_parser = origin, allow_hyphen_values = true)]
     origin: Option<[f64; 3]>,
-    /// Place the local coordinates in map coordinates (easting,northing[,elevation[,rotation of the local X axis from east in degrees]], in m). Requires --crs.
+    /// Place the local coordinates in map coordinates (easting,northing[,elevation[,rotation of the local X axis from east in degrees]], in m). Requires --crs
     /// Used instead of the file's georeferencing. Use 0,0 if the local coordinates are already map coordinates
     #[arg(long, value_parser = map_conversion, allow_hyphen_values = true, conflicts_with = "origin")]
     map_conversion: Option<[f64; 4]>,
 }
 
-/// A bare number is treated as an EPSG code. Anything else is passed to PROJ as is.
+/// A bare number is treated as an EPSG code. Anything else is passed to PROJ as is
 fn crs(s: &str) -> Result<String, String> {
     let s = s.trim();
     Ok(if s.parse::<u32>().is_ok() { format!("EPSG:{s}") } else { s.to_string() })

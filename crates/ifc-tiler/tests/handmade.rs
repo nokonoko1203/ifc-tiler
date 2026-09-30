@@ -1,8 +1,8 @@
-//! Converts the handmade IFCs (testdata/handmade), reads the output back and checks it.
+//! Converts the handmade IFCs (testdata/handmade), reads the output back and checks it
 //!
-//! The output (quantized + meshopt) is decoded, and the positions of known points and the element properties are checked.
-//! Expected values are in testdata/handmade/expected.json (GSI calculation results, and GeographicLib examples outside Japan).
-//! PROJ does the coordinate conversion and downloads grids (geoids etc.) from cdn.proj.org (the first run needs network access).
+//! The output (quantized + meshopt) is decoded to check the positions of known points and the element properties
+//! Expected values are in testdata/handmade/expected.json (GSI calculation results, plus GeographicLib examples outside Japan)
+//! PROJ does the coordinate conversion and downloads grids (geoids etc.) from cdn.proj.org, so the first run needs network access
 
 mod common;
 
@@ -14,9 +14,9 @@ use ifc_tiler::convert;
 use serde_json::Value;
 
 const CUBE: &str = "既知点立方体";
-/// JGD2011 / Japan Plane Rectangular CS IX + JGD2011 height.
+/// JGD2011 / Japan Plane Rectangular CS IX + JGD2011 height
 const PLANE_IX_WITH_HEIGHT: &str = "EPSG:10170";
-/// JGD2011 latitude/longitude + JGD2011 height.
+/// JGD2011 latitude/longitude + JGD2011 height
 const JGD2011_WITH_HEIGHT: &str = "EPSG:6697";
 
 fn with_crs(crs: &str) -> GeorefOptions {
@@ -27,7 +27,7 @@ fn expected() -> Value {
     serde_json::from_slice(&std::fs::read(root().join("testdata/handmade/expected.json")).unwrap()).unwrap()
 }
 
-/// WGS84 (latitude, longitude, ellipsoidal height) → ECEF.
+/// WGS84 (latitude, longitude, ellipsoidal height) → ECEF
 fn ecef(lat_deg: f64, lon_deg: f64, h: f64) -> [f64; 3] {
     let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
     let (a, f) = (6_378_137.0, 1.0 / 298.257_223_563);
@@ -36,7 +36,7 @@ fn ecef(lat_deg: f64, lon_deg: f64, h: f64) -> [f64; 3] {
     [(n + h) * lat.cos() * lon.cos(), (n + h) * lat.cos() * lon.sin(), (n * (1.0 - e2) + h) * lat.sin()]
 }
 
-/// ECEF → WGS84 ellipsoidal height. The latitude is found iteratively.
+/// ECEF → WGS84 ellipsoidal height, iterating for the latitude
 fn ellipsoidal_height(p: [f64; 3]) -> f64 {
     let (a, f) = (6_378_137.0, 1.0 / 298.257_223_563);
     let e2 = f * (2.0 - f);
@@ -72,7 +72,7 @@ fn run(file: &str, name: &str, opts: &GeorefOptions) -> PathBuf {
     out
 }
 
-/// ECEF of the GSI known point (ellipsoidal height = elevation 3 m + geoid height).
+/// ECEF of the GSI known point (ellipsoidal height = 3 m elevation + geoid height)
 fn known_point(geoid_key: &str) -> [f64; 3] {
     let exp = expected();
     let k = &exp["known_point"];
@@ -80,7 +80,7 @@ fn known_point(geoid_key: &str) -> [f64; 3] {
     ecef(k["latitude"].as_f64().unwrap(), k["longitude"].as_f64().unwrap(), h)
 }
 
-/// Distance [m] to the cube vertex closest to the known point (the corner at the local origin).
+/// Distance [m] to the cube vertex closest to the known point (the corner at the local origin)
 fn cube_error(features: &[Feature], geoid_key: &str) -> f64 {
     nearest(features, known_point(geoid_key))
 }
@@ -98,7 +98,7 @@ fn site_lat_lon_known_point() {
     assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
 }
 
-/// Placing an IFC whose local coordinates are plane rectangular coordinates with ENU around the latitude/longitude of IfcSite is far off and produces a warning.
+/// Placing an IFC whose local coordinates are plane rectangular coordinates with ENU around IfcSite's latitude/longitude lands far off and warns
 #[test]
 fn plan_coordinates_in_enu_are_warned() {
     let out = out_dir("handmade/plateau_enu");
@@ -108,7 +108,7 @@ fn plan_coordinates_in_enu_are_warned() {
     assert!(cube_error(&read_tileset(&out), "geoid_height_jpgeo2024_m") > 100.0);
 }
 
-/// An IFC whose local coordinates are plane rectangular coordinates can be placed with just `--map-conversion 0,0 --crs`.
+/// An IFC whose local coordinates are plane rectangular coordinates can be placed with `--map-conversion 0,0 --crs` alone
 #[test]
 fn map_conversion_option_places_plan_coordinates() {
     let mut opts = GeorefOptions { map_conversion: Some([0.0, 0.0, 0.0, 0.0]), ..with_crs(PLANE_IX_WITH_HEIGHT) };
@@ -121,7 +121,7 @@ fn map_conversion_option_places_plan_coordinates() {
     assert!(matches!(e, ifc_tiler::Error::Input(_)), "{e}");
 }
 
-/// Outside Japan: the horizontal position of a cube placed at UTM 38N map coordinates matches the GeographicLib example.
+/// Outside Japan: a cube placed at UTM 38N map coordinates lands at the horizontal position of the GeographicLib example
 #[test]
 fn utm_map_conversion_matches_geographiclib() {
     let exp = expected();
@@ -129,7 +129,7 @@ fn utm_map_conversion_matches_geographiclib() {
     let (e, n) = (u["easting_m"].as_f64().unwrap(), u["northing_m"].as_f64().unwrap());
     let opts = GeorefOptions { map_conversion: Some([e, n, 0.0, 0.0]), ..with_crs("EPSG:32638") };
     let f = read_tileset(&run("ifc4_map_conversion.ifc", "utm38n", &opts));
-    // The height is determined by EGM2008, so build the known point from each vertex's ellipsoidal height and only look at the horizontal distance
+    // The height comes from EGM2008, so build the known point at each vertex's ellipsoidal height and compare only the horizontal distance
     let (lat, lon) = (u["latitude"].as_f64().unwrap(), u["longitude"].as_f64().unwrap());
     let err = cube(&f)
         .ecef
@@ -143,7 +143,7 @@ fn utm_map_conversion_matches_geographiclib() {
     assert!(err < u["rounding_m"].as_f64().unwrap(), "{err}");
 }
 
-/// Outside Japan: without a height reference, heights are treated as EGM2008 heights, and the geoid height matches GeographicLib's test data.
+/// Outside Japan: without a height reference, heights are treated as EGM2008 heights, and the geoid height matches GeographicLib's test data
 #[test]
 fn egm2008_height_matches_geographiclib() {
     let exp = expected();
@@ -158,7 +158,7 @@ fn egm2008_height_matches_geographiclib() {
     assert!(err < 0.05, "{err}");
 }
 
-/// `--map-conversion` cannot be combined with `--origin` (exit code 2).
+/// `--map-conversion` cannot be combined with `--origin` (exit code 2)
 #[test]
 fn map_conversion_conflicts_with_origin() {
     let input = root().join("testdata/handmade/ifc2x3_plateau_origin.ifc");
@@ -197,19 +197,19 @@ fn element_semantics() {
     assert_eq!(get(wall, "tag"), "W-01");
     assert_eq!(get(wall, "predefinedType"), "STANDARD");
 
-    // A Japanese Pset name becomes a hashed ID, and the original name stays in the class's `name`
+    // A Japanese Pset name becomes a hashed ID, and the original name is kept in the class's `name`
     let concrete = wall.props.iter().find(|(_, v)| v.as_f64() == Some(24.0)).map(|(k, _)| k.clone()).unwrap();
     assert!(concrete.starts_with("p_"), "{concrete}");
 
     // Membership is decided by containment (1F), not by reference (2F)
     assert_eq!(get(by_name("通し柱"), "storeyName"), "1階");
 
-    // Openings and spaces do not become features. Each of the two desks becomes a feature
+    // Openings and spaces are not features; each of the two desks is one
     let classes: Vec<&str> = features.iter().filter_map(|f| f.props["ifcClass"].as_str()).collect();
     assert!(!classes.contains(&"IfcOpeningElement") && !classes.contains(&"IfcSpace"), "{classes:?}");
     assert_eq!(classes.iter().filter(|c| **c == "IfcFurniture").count(), 2);
     assert_eq!(get(by_name("机2"), "storeyName"), "2階");
-    // The desks are copies of the same shape (IfcMappedItem) but at different positions
+    // The desks are copies of one shape (IfcMappedItem) at different positions
     let (a, b) = (&by_name("机1").ecef, &by_name("机2").ecef);
     assert!(!a.is_empty() && !b.is_empty() && (a[0][0] - b[0][0]).abs() + (a[0][1] - b[0][1]).abs() > 0.1);
 }

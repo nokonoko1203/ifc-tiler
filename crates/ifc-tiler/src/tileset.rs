@@ -1,4 +1,4 @@
-//! Assembly of tileset.json.
+//! Assembly of tileset.json
 
 use serde_json::{Map, Value, json};
 
@@ -7,7 +7,7 @@ use crate::metadata::{LOGICAL_ENUM_ID, Table, logical_enum};
 use crate::semantics::Storey;
 use crate::tiling::{Aabb, Node};
 
-/// `trees[s]` is the tile tree of storey `s`. `uri(s, node)` is the URI of the node's content (`None` for nodes without content).
+/// `trees[s]` is the tile tree of storey `s`. `uri(s, node)` is the URI of the node's content (`None` for nodes without content)
 pub fn build(
     frame: &Frame,
     bounds: &Aabb,
@@ -72,7 +72,7 @@ fn node(n: &Node, storey: usize, uri: &dyn Fn(usize, &Node) -> Option<String>) -
     v
 }
 
-/// A 3D Tiles `box` (center and three half axes). Half lengths are at least 1 cm to avoid degenerate boxes.
+/// A 3D Tiles `box` (center and three half axes). Half lengths are at least 1 cm to avoid degenerate boxes
 fn bounding_box(b: &Aabb) -> [f64; 12] {
     let c = b.center();
     let h = b.size().map(|s| (s / 2.0).max(0.01));

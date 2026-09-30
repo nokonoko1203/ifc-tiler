@@ -1,20 +1,20 @@
-//! Deciding which elements become 3D Tiles features.
+//! Deciding which elements become 3D Tiles features
 //!
-//! From the products that have geometry, openings, spaces, structural analysis elements and types are excluded,
-//! and aggregated parts are merged into their parent (a multi-layer wall's parent only has an axis, and its Psets are on the parent; parts have none).
+//! Of the products with geometry, openings, spaces, structural analysis elements and types are dropped,
+//! and aggregated parts are merged into their parent (the parent of a multi-layer wall has only an axis for geometry but holds the Psets; its parts have none)
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::metadata::ElementRecord;
 use crate::source::{Product, SourceModel};
 
-/// An element that becomes a feature.
+/// An element that becomes a feature
 #[derive(Clone, Debug, PartialEq)]
 pub struct Element {
     pub record: ElementRecord,
-    /// Storey the element belongs to (index into `Semantics::storeys`).
+    /// Storey the element belongs to (index into `Semantics::storeys`)
     pub storey: usize,
-    /// Indices into `SourceModel::meshes`.
+    /// Indices into `SourceModel::meshes`
     pub meshes: Vec<usize>,
 }
 
@@ -28,7 +28,7 @@ pub struct Storey {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Semantics {
     pub elements: Vec<Element>,
-    /// In ascending order of elevation. Elements without a storey go to `(unassigned)`.
+    /// Sorted by elevation. Elements without a storey go to `(unassigned)`
     pub storeys: Vec<Storey>,
 }
 
@@ -59,7 +59,7 @@ fn is_spatial(class: &str) -> bool {
     SPATIAL.contains(&class)
 }
 
-/// Whether a product is excluded from becoming a feature.
+/// True if the product is not made a feature
 fn is_excluded(class: &str) -> bool {
     matches!(class, "IfcOpeningElement" | "IfcOpeningStandardCase" | "IfcVirtualElement" | "IfcAnnotation" | "IfcGrid")
         || class.starts_with("IfcStructural")
@@ -135,7 +135,7 @@ pub fn build(model: &SourceModel) -> Semantics {
     s
 }
 
-/// Follows aggregation upwards and returns the element directly under a spatial element.
+/// Walks up the aggregation to the element directly under a spatial element
 fn owner_of(model: &SourceModel, id: u32) -> u32 {
     let mut cur = id;
     for _ in 0..32 {
@@ -148,7 +148,7 @@ fn owner_of(model: &SourceModel, id: u32) -> u32 {
     cur
 }
 
-/// Follows the spatial structure upwards and returns the first storey and building.
+/// Walks up the spatial structure to the first storey and building
 fn spatial_ancestors(model: &SourceModel, id: u32) -> (Option<u32>, Option<u32>) {
     let (mut storey, mut building) = (None, None);
     let mut cur = id;
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    /// Building 1 > storeys (1F at 0 m, 2F at 3 m). A multi-layer wall (two parts) and an opening on 1F, a column on 2F.
+    /// One building with 1F (0 m) and 2F (3 m). 1F has a multi-layer wall (two parts) and an opening; 2F has a column
     fn model() -> SourceModel {
         let mut m = SourceModel::default();
         for (id, p) in [

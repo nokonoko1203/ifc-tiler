@@ -1,10 +1,10 @@
-//! Builds the GLB (binary glTF 2.0) of one tile.
+//! Builds the GLB (binary glTF 2.0) of one tile
 //!
-//! Directly placed meshes are merged into two primitives, opaque and translucent, with colors in `COLOR_0` and elements
-//! distinguished by `_FEATURE_ID_0`. If a tile has many meshes of the same shape (differing only by translation), they become one template and
-//! `EXT_mesh_gpu_instancing` instances. Identical vertices are welded, positions are quantized to UINT16 and normals to
-//! INT8 (normals use the OCTAHEDRAL filter), and everything is encoded with `EXT_meshopt_compression`
-//! (the quantization step is about 0.6 mm for the largest tile).
+//! Directly placed meshes are merged into two primitives, opaque and translucent, with colors in `COLOR_0` and
+//! elements in `_FEATURE_ID_0`. Meshes of the same shape (differing only by translation) that occur many times in a tile become
+//! one template plus `EXT_mesh_gpu_instancing` instances. Identical vertices are welded, positions are quantized to UINT16
+//! and normals to INT8 (OCTAHEDRAL filter), and everything is encoded with `EXT_meshopt_compression`
+//! (the quantization step is about 0.6 mm for the largest tile)
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -25,14 +25,14 @@ unsafe extern "C" {
     fn meshopt_encodeFilterOct(destination: *mut c_void, count: usize, stride: usize, bits: i32, data: *const f32);
 }
 
-/// Minimum number of identical meshes to instance, and minimum vertex count of the template.
-/// Splitting off even small shapes increases node/accessor JSON and draw calls, which backfires (measured on real data).
+/// Minimum number of identical meshes to instance, and minimum vertex count of the template
+/// Instancing small shapes adds node/accessor JSON and draw calls, which costs more than it saves (measured on real data)
 const INSTANCE_MIN_COPIES: usize = 3;
 const INSTANCE_MIN_VERTICES: usize = 200;
 
-/// The mesh of one element in a tile (root ENU coordinates, z up).
+/// The mesh of one element in a tile (root ENU coordinates, z up)
 pub struct TileMesh<'a> {
-    /// Element index within the tile (row of the property table).
+    /// Element index within the tile (row of the property table)
     pub feature: u32,
     pub color: [f32; 4],
     pub positions: &'a [[f64; 3]],
@@ -40,7 +40,7 @@ pub struct TileMesh<'a> {
     pub indices: &'a [u32],
 }
 
-/// A reference to the metadata (the row numbers passed to `Table::encode` and the schema ID).
+/// Metadata reference: the rows passed to `Table::encode` and the schema ID
 pub struct TileMetadata<'a> {
     pub table: &'a Table,
     pub rows: &'a [usize],
@@ -55,10 +55,10 @@ const BYTE: u32 = 5120;
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 
-/// If alpha rounded to 8 bits is at or below this, the mesh is translucent (`BLEND`) (0.99 × 255).
+/// Alpha (rounded to 8 bits) at or below this makes the mesh translucent (`BLEND`); 0.99 × 255
 const OPAQUE_MIN_ALPHA: u8 = 253;
 
-/// The vertices of one primitive (glTF Y-up coordinates).
+/// The vertices of one primitive (glTF Y-up coordinates)
 #[derive(Default)]
 struct Group {
     positions: Vec<[f32; 3]>,
@@ -68,13 +68,13 @@ struct Group {
     indices: Vec<u32>,
 }
 
-/// One template and its instances (element index, minimum point in ENU).
+/// One template and its instances (element index, minimum point in ENU)
 struct Instanced {
     template: usize,
     instances: Vec<(u32, [f64; 3])>,
 }
 
-/// Builds the bytes of a GLB.
+/// Builds a GLB
 pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     let (instanced, direct) = find_instances(meshes);
     let groups = group_by_opacity(meshes, &direct);
@@ -96,12 +96,12 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     document(w, materials, nodes, gltf_meshes, meta, !instanced.is_empty())
 }
 
-/// The `featureIds` that tie element IDs (`_FEATURE_ID_0`) to the rows of property table 0.
+/// The `featureIds` that tie element IDs (`_FEATURE_ID_0`) to the rows of property table 0
 fn feature_ids(count: usize) -> Value {
     json!([{ "featureCount": count, "attribute": 0, "propertyTable": 0, "label": "element" }])
 }
 
-/// The node of the directly placed meshes and its mesh (the `mesh_index`-th). It has opaque and translucent primitives.
+/// Node and mesh (index `mesh_index`) of the directly placed meshes, with opaque and translucent primitives
 fn direct_node(
     w: &mut Writer,
     materials: &mut Materials,
@@ -127,7 +127,7 @@ fn direct_node(
     (node, json!({ "primitives": primitives }))
 }
 
-/// The node of an instanced template and its mesh (the `mesh_index`-th).
+/// Node and mesh (index `mesh_index`) of an instanced template
 fn instanced_node(
     w: &mut Writer,
     materials: &mut Materials,
@@ -166,7 +166,7 @@ fn instanced_node(
     (node, json!({ "primitives": [Value::Object(p)] }))
 }
 
-/// Places the metadata (uncompressed, in buffer 0) and packs the glTF document and binary into a GLB.
+/// Places the metadata (uncompressed, in buffer 0) and packs the glTF document and binary into a GLB
 fn document(
     mut w: Writer,
     materials: Materials,
@@ -209,7 +209,7 @@ fn document(
     pack(&gltf, &w.bin)
 }
 
-/// Decides the origin and step (longest side ÷ 65535) of a uniform quantization from a bounding box.
+/// Origin and step (longest side ÷ 65535) of a uniform quantization for a bounding box
 fn quantization(bounds: &Aabb) -> ([f64; 3], f64) {
     let extent = bounds.size().into_iter().fold(0.001, f64::max);
     (bounds.min, extent / 65535.0)
@@ -219,7 +219,7 @@ fn color_key(c: [f32; 4]) -> [u8; 4] {
     c.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// Quantization used to compare shapes (coordinates relative to the minimum point rounded to 1 mm, normals to steps of 0.01).
+/// Quantization used to compare shapes (coordinates relative to the minimum point rounded to 1 mm, normals to steps of 0.01)
 struct Shape {
     color: [u8; 4],
     min: [f64; 3],
@@ -256,10 +256,10 @@ impl Shape {
     }
 }
 
-/// Splits the meshes into groups to instance and the indices of the meshes to place directly.
+/// Splits the meshes into groups to instance and the indices of the meshes to place directly
 fn find_instances(meshes: &[TileMesh]) -> (Vec<Instanced>, Vec<usize>) {
     let shapes: Vec<Shape> = meshes.iter().map(Shape::of).collect();
-    // Gather candidates by hash, then compare the quantized values to split them into equivalence classes (keeping the order of appearance)
+    // Collect candidates by hash, then compare quantized values to split them into equivalence classes (order of appearance kept)
     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut classes: Vec<Vec<usize>> = Vec::new();
     for (i, s) in shapes.iter().enumerate() {
@@ -290,7 +290,7 @@ fn find_instances(meshes: &[TileMesh]) -> (Vec<Instanced>, Vec<usize>) {
     (instanced, direct)
 }
 
-/// Merges the directly placed meshes into two groups, opaque and translucent (in this order).
+/// Merges the directly placed meshes into two groups, opaque and translucent (in this order)
 fn group_by_opacity(meshes: &[TileMesh], direct: &[usize]) -> Vec<(bool, Group)> {
     let mut opaque = Group::default();
     let mut translucent = Group::default();
@@ -309,7 +309,7 @@ fn group_by_opacity(meshes: &[TileMesh], direct: &[usize]) -> Vec<(bool, Group)>
     [(false, opaque), (true, translucent)].into_iter().filter(|(_, g)| !g.positions.is_empty()).collect()
 }
 
-/// The vertices of a template (Y-up coordinates with `origin` as the origin). Color comes from the material, so it is not stored.
+/// Vertices of a template (Y-up, relative to `origin`). Colors come from the material, so none are stored
 fn template_group(m: &TileMesh, origin: [f64; 3]) -> Group {
     let rel = |p: &[f64; 3]| [(p[0] - origin[0]) as f32, (p[2] - origin[2]) as f32, (origin[1] - p[1]) as f32];
     Group {
@@ -326,7 +326,7 @@ fn normalize(n: [f32; 3]) -> [f32; 3] {
     if l > 1e-12 { n.map(|v| v / l) } else { [0.0, 1.0, 0.0] }
 }
 
-/// Kind of material. Directly placed meshes have a white factor with the color in `COLOR_0`; templates have the color as the factor.
+/// Kind of material. Directly placed meshes have a white factor with the color in `COLOR_0`; templates have the color as the factor
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MaterialKey {
     VertexColor { translucent: bool },
@@ -371,7 +371,7 @@ struct QuantVertex {
     f: f32,
 }
 
-/// Welding of identical vertices, and vertex cache and vertex fetch optimization.
+/// Welding of identical vertices, and vertex cache and vertex fetch optimization
 fn weld<T: Copy + Default>(vertices: &[T], indices: &[u32]) -> (Vec<T>, Vec<u32>) {
     let (count, remap) = generate_vertex_remap(vertices, Some(indices));
     let mut idx = remap_index_buffer(Some(indices), count, &remap);
@@ -381,7 +381,7 @@ fn weld<T: Copy + Default>(vertices: &[T], indices: &[u32]) -> (Vec<T>, Vec<u32>
     (v, idx)
 }
 
-/// Converts INT8 normals (xyz and 0) to the 8-bit representation of the OCTAHEDRAL filter.
+/// Converts INT8 normals (xyz and 0) to the 8-bit representation of the OCTAHEDRAL filter
 fn encode_oct(normals: &[[i8; 4]]) -> Vec<[i8; 4]> {
     let data: Vec<f32> = normals
         .iter()
@@ -398,7 +398,7 @@ struct Writer {
     bin: Vec<u8>,
     views: Vec<Value>,
     accessors: Vec<Value>,
-    /// Length of the meshopt fallback (decoded) buffer.
+    /// Length of the meshopt fallback (decoded) buffer
     fallback_len: usize,
 }
 
@@ -409,7 +409,7 @@ impl Writer {
         }
     }
 
-    /// A bufferView placed as is in buffer 0.
+    /// A bufferView placed as is in buffer 0
     fn plain_view(&mut self, bytes: Vec<u8>) -> usize {
         self.align_bin();
         self.views.push(json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() }));
@@ -417,7 +417,7 @@ impl Writer {
         self.views.len() - 1
     }
 
-    /// A bufferView encoded with meshopt. `mode` is `ATTRIBUTES` or `TRIANGLES`.
+    /// A bufferView encoded with meshopt. `mode` is `ATTRIBUTES` or `TRIANGLES`
     fn meshopt_view(&mut self, raw_len: usize, encoded: Vec<u8>, stride: usize, count: usize, mode: &str) -> usize {
         self.align_bin();
         let offset = self.bin.len();
@@ -441,7 +441,7 @@ impl Writer {
         self.views.len() - 1
     }
 
-    /// Encodes a 4-byte-wide vertex attribute with meshopt.
+    /// Encodes a 4-byte-wide vertex attribute with meshopt
     fn meshopt_attribute<T: Copy + Default>(&mut self, data: &[T]) -> usize {
         let encoded = encode_vertex_buffer(data).expect("meshopt vertex encoding");
         self.meshopt_view(std::mem::size_of_val(data), encoded, size_of::<T>(), data.len(), "ATTRIBUTES")
@@ -456,7 +456,7 @@ impl Writer {
         self.accessors.len() - 1
     }
 
-    /// Instance attributes (FLOAT). Not compressed because there are few of them.
+    /// Instance attributes (FLOAT). Not compressed because there are few of them
     fn instance_accessor(&mut self, values: &[f32], count: usize, ty: &str) -> usize {
         let view = self.plain_view(values.iter().flat_map(|v| v.to_le_bytes()).collect());
         self.accessor(view, FLOAT, count, ty, json!({}))
@@ -470,7 +470,7 @@ impl Writer {
         self.accessor(view, component, idx.len(), "SCALAR", json!({}))
     }
 
-    /// A quantized, meshopt-encoded primitive. Positions are restored as `min + step·q` (via the node matrix or the instance scale).
+    /// A quantized, meshopt-encoded primitive. Positions are restored as `min + step·q` (via the node matrix or the instance scale)
     fn quantized(&mut self, g: &Group, min: [f64; 3], step: f64) -> Map<String, Value> {
         let q = |p: [f32; 3]| -> [u16; 4] {
             let c = |k: usize| ((f64::from(p[k]) - min[k]) / step).round().clamp(0.0, 65535.0) as u16;
@@ -532,7 +532,7 @@ fn primitive(attributes: Map<String, Value>, indices: usize) -> Map<String, Valu
     p
 }
 
-/// Packs the JSON and binary into a GLB container.
+/// Packs the JSON and binary into a GLB container
 fn pack(gltf: &Value, bin: &[u8]) -> Vec<u8> {
     let mut js = serde_json::to_vec(gltf).expect("serializing glTF to JSON");
     while !js.len().is_multiple_of(4) {
@@ -569,7 +569,7 @@ mod tests {
 
     type Mesh = (Vec<[f64; 3]>, Vec<[f32; 3]>, Vec<u32>);
 
-    /// Places a cube with 1 m sides (with vertices per face, flat shading as in ifc-lite) at `o`.
+    /// Cube with 1 m sides at `o`, with vertices per face (flat shading, like ifc-lite)
     fn cube(o: [f64; 3]) -> Mesh {
         let mut p = Vec::new();
         let mut n = Vec::new();
@@ -594,7 +594,7 @@ mod tests {
         (p, n, idx)
     }
 
-    /// Places a z-up grid of 15×15 vertices (225 vertices, at least the minimum for instancing) at `o`.
+    /// A z-up grid of 15×15 vertices at `o` (225 vertices, above the instancing minimum)
     fn grid(o: [f64; 3]) -> Mesh {
         let k = 15u32;
         let p = (0..k * k).map(|i| [o[0] + f64::from(i % k) * 0.1, o[1] + f64::from(i / k) * 0.1, o[2]]).collect();
@@ -645,7 +645,7 @@ mod tests {
         v.as_u64().unwrap() as usize
     }
 
-    /// The bytes of a bufferView (decoded if it uses meshopt, including undoing the OCTAHEDRAL filter).
+    /// The bytes of a bufferView (decoded if it uses meshopt, including undoing the OCTAHEDRAL filter)
     fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
         let v = &js["bufferViews"][i];
         let Some(m) = v["extensions"].get("EXT_meshopt_compression") else {

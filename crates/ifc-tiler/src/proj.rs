@@ -1,7 +1,7 @@
-//! A thin RAII wrapper around PROJ (proj-sys). `unsafe` and raw pointers are confined to this file.
+//! A thin RAII wrapper around PROJ (proj-sys). `unsafe` and raw pointers are confined to this file
 //!
-//! The context (`Context`) and objects (`Object`) are destroyed in `Drop`.
-//! Objects hold a reference count of the context and are destroyed before it.
+//! The context (`Context`) and objects (`Object`) are destroyed in `Drop`
+//! Objects hold a reference count of the context and are destroyed before it
 
 use std::ffi::{CStr, CString};
 use std::ptr::{self, NonNull};
@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use proj_sys as sys;
 
-/// Kind of CRS. Only the kinds used for decisions are distinguished.
+/// Kind of CRS, limited to the ones callers branch on
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Compound,
@@ -23,17 +23,17 @@ struct RawContext(NonNull<sys::PJ_CONTEXT>);
 
 impl Drop for RawContext {
     fn drop(&mut self) {
-        // SAFETY: destroys the one context that was created exactly once. Objects hold it and have already been destroyed
+        // SAFETY: destroys the context created in new, once. Objects hold a reference, so they are already gone
         unsafe { sys::proj_context_destroy(self.0.as_ptr()) };
     }
 }
 
-/// A PROJ context. Clones share the same context.
+/// A PROJ context. Clones share the same context
 #[derive(Clone)]
 pub struct Context(Rc<RawContext>);
 
 impl Context {
-    /// `None` if it cannot be created.
+    /// `None` if it cannot be created
     pub fn new() -> Option<Self> {
         // SAFETY: takes no arguments. The returned NULL is checked
         let ctx = NonNull::new(unsafe { sys::proj_context_create() })?;
@@ -44,13 +44,13 @@ impl Context {
         self.0.0.as_ptr()
     }
 
-    /// Enables or disables downloading grids over the network.
+    /// Enables or disables downloading grids over the network
     pub fn set_network(&self, enable: bool) {
         // SAFETY: ctx is valid
         unsafe { sys::proj_context_set_enable_network(self.raw(), i32::from(enable)) };
     }
 
-    /// Enables the grid cache.
+    /// Enables the grid cache
     pub fn enable_grid_cache(&self) {
         // SAFETY: ctx is valid
         unsafe { sys::proj_grid_cache_set_enable(self.raw(), 1) };
@@ -60,14 +60,14 @@ impl Context {
         NonNull::new(pj).map(|pj| Object { pj, ctx: self.clone() })
     }
 
-    /// Creates an object from a definition string (`EPSG:4326`, WKT, …). `None` if it cannot be parsed.
+    /// Creates an object from a definition string (`EPSG:4326`, WKT, …). `None` if it cannot be parsed
     pub fn create(&self, definition: &str) -> Option<Object> {
         let def = CString::new(definition).ok()?;
         // SAFETY: ctx is valid. def is NUL-terminated
         self.wrap(unsafe { sys::proj_create(self.raw(), def.as_ptr()) })
     }
 
-    /// Creates a compound CRS from a horizontal CRS and a vertical CRS.
+    /// Creates a compound CRS from a horizontal CRS and a vertical CRS
     pub fn compound_crs(&self, name: &str, horizontal: &Object, vertical: &Object) -> Option<Object> {
         let name = CString::new(name).ok()?;
         // SAFETY: ctx and both objects are valid (objects hold ctx)
@@ -76,7 +76,7 @@ impl Context {
         })
     }
 
-    /// Creates a transformation from `source` to `target` (PROJ picks from the candidates).
+    /// Creates a transformation from `source` to `target` (PROJ picks from the candidates)
     pub fn crs_to_crs(&self, source: &Object, target: &Object) -> Option<Object> {
         // SAFETY: ctx and both objects are valid. No area or options are specified
         self.wrap(unsafe {
@@ -91,7 +91,7 @@ impl Context {
     }
 }
 
-/// A PROJ object (a CRS or a transformation). Destroyed exactly once in `Drop`.
+/// A PROJ object (a CRS or a transformation). Destroyed exactly once in `Drop`
 pub struct Object {
     pj: NonNull<sys::PJ>,
     ctx: Context,
@@ -99,13 +99,13 @@ pub struct Object {
 
 impl Drop for Object {
     fn drop(&mut self) {
-        // SAFETY: destroys the one object that was created exactly once. ctx is destroyed afterwards
+        // SAFETY: destroys the object created for this value, once. ctx is destroyed afterwards
         unsafe { sys::proj_destroy(self.pj.as_ptr()) };
     }
 }
 
 impl Object {
-    /// Kind of CRS.
+    /// Kind of CRS
     pub fn kind(&self) -> Kind {
         // SAFETY: pj is valid
         match unsafe { sys::proj_get_type(self.pj.as_ptr()) } {
@@ -117,19 +117,19 @@ impl Object {
         }
     }
 
-    /// The `index`-th sub-CRS of a compound CRS.
+    /// The `index`-th sub-CRS of a compound CRS
     pub fn sub_crs(&self, index: i32) -> Option<Object> {
         // SAFETY: ctx and pj are valid
         self.ctx.wrap(unsafe { sys::proj_crs_get_sub_crs(self.ctx.raw(), self.pj.as_ptr(), index) })
     }
 
-    /// The transformation with axis order normalized to (east, north) or (longitude, latitude).
+    /// The transformation with axis order normalized to (east, north) or (longitude, latitude)
     pub fn normalize_for_visualization(&self) -> Option<Object> {
         // SAFETY: ctx and pj are valid
         self.ctx.wrap(unsafe { sys::proj_normalize_for_visualization(self.ctx.raw(), self.pj.as_ptr()) })
     }
 
-    /// Transforms one point in the forward direction. `None` if the result is not finite.
+    /// Transforms one point forward, or `None` if the result is not finite
     pub fn trans(&self, [x, y, z]: [f64; 3]) -> Option<[f64; 3]> {
         // SAFETY: pj is a valid transformation
         let [x, y, z, _] =
@@ -137,19 +137,19 @@ impl Object {
         [x, y, z].iter().all(|v| v.is_finite()).then_some([x, y, z])
     }
 
-    /// The operation used by the last transformation. `None` for a transformation with a single candidate (the transformation itself is the operation).
+    /// Operation used by the last transformation, or `None` if there is only one candidate (then the transformation itself is the operation)
     pub fn last_used_operation(&self) -> Option<Object> {
         // SAFETY: pj is valid. The return value is a copy, so Object destroys it
         self.ctx.wrap(unsafe { sys::proj_trans_get_last_used_operation(self.pj.as_ptr()) })
     }
 
-    /// Whether the operation includes an approximation that does not use grids (ballpark).
+    /// Whether the operation includes an approximation that does not use grids (ballpark)
     pub fn has_ballpark_transformation(&self) -> bool {
         // SAFETY: ctx and pj are valid
         unsafe { sys::proj_coordoperation_has_ballpark_transformation(self.ctx.raw(), self.pj.as_ptr()) == 1 }
     }
 
-    /// The name of the object.
+    /// Name of the object
     pub fn name(&self) -> String {
         // SAFETY: pj is valid. The name is a NUL-terminated string owned by the object (empty if NULL)
         unsafe {

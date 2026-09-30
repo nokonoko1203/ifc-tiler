@@ -1,8 +1,8 @@
-//! Converts IFC into 3D Tiles 1.1 with element metadata.
+//! Converts IFC into 3D Tiles 1.1 with element metadata
 //!
-//! Pipeline (`convert`):
+//! Pipeline of `convert`:
 //! `source` (read the IFC) → `semantics` (decide which elements become features) → `georef` (decide the placement)
-//! → `geodesy` (ECEF → root ENU) → `tiling` (tile tree) → `metadata` / `glb` / `tileset` (output).
+//! → `geodesy` (ECEF → root ENU) → `tiling` (tile tree) → `metadata` / `glb` / `tileset` (output)
 
 mod geodesy;
 mod georef;
@@ -30,27 +30,27 @@ use crate::semantics::Semantics;
 use crate::source::SourceModel;
 use crate::tiling::{Aabb, Node};
 
-/// Maximum number of elements per tile.
+/// Maximum number of elements per tile
 const MAX_FEATURES: usize = 200;
 
-/// Result of a conversion.
+/// Result of a conversion
 #[derive(Clone, Debug, PartialEq)]
 pub struct Summary {
     pub elements: usize,
     pub storeys: usize,
     pub tiles: usize,
-    /// Total size of the GLB files [bytes].
+    /// Total GLB size in bytes
     pub bytes: usize,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
 pub enum Error {
-    /// Invalid input or settings (exit code 2).
+    /// Invalid input or settings (exit code 2)
     Input(String),
-    /// No convertible elements (exit code 3).
+    /// No convertible elements (exit code 3)
     NoElements(String),
-    /// Output failures and the like (exit code 1).
+    /// Write failures and other errors (exit code 1)
     Io(String),
 }
 
@@ -74,7 +74,7 @@ fn outside([e, n, _]: [f64; 3]) -> Error {
     ))
 }
 
-/// Converts the IFC at `input` and writes tileset.json and tiles/*.glb to `output`.
+/// Converts the IFC at `input` and writes tileset.json and tiles/*.glb to `output`
 pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summary, Error> {
     let bytes = fs::read(input).map_err(|e| Error::Input(format!("{}: {e}", input.display())))?;
     let model = source::read(&bytes);
@@ -120,18 +120,18 @@ pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summ
     })
 }
 
-/// Geometry placed on the globe. Vertices and normals are in the root ENU (`frame`) coordinates, indexed like `SourceModel::meshes`.
-/// Meshes that do not become features are empty.
+/// Geometry placed on the globe, indexed like `SourceModel::meshes`. Vertices and normals are in root ENU (`frame`) coordinates
+/// Empty for meshes that are not features
 struct Placed {
     frame: Frame,
     positions: Vec<Vec<[f64; 3]>>,
     normals: Vec<Vec<[f32; 3]>>,
-    /// Bounding boxes in the root ENU, indexed like `Semantics::elements`.
+    /// Bounding boxes in the root ENU, indexed like `Semantics::elements`
     element_bounds: Vec<Aabb>,
     warnings: Vec<String>,
 }
 
-/// Local coordinates → ECEF → root ENU. The root ENU origin is the center of the ECEF bounding box of all vertices.
+/// Local → ECEF → root ENU. The root ENU origin is the center of the ECEF bounding box of all vertices
 fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Placed, Error> {
     let mut warnings = resolved.warnings.clone();
     let (projector, projector_warnings) = Projector::new(&resolved.placement).map_err(Error::Input)?;
@@ -152,7 +152,7 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Pl
     let mut normals: Vec<Vec<[f32; 3]>> = vec![Vec::new(); model.meshes.len()];
     let mut element_bounds = Vec::with_capacity(sem.elements.len());
     for e in &sem.elements {
-        // Normals are rotated by the local → root ENU rotation computed at the element's center (not projected per vertex)
+        // Normals use the local → root ENU rotation at the element's center; they are not projected per vertex
         let local = Aabb::from_points(e.meshes.iter().flat_map(|&i| &model.meshes[i].positions).copied());
         let r = projector.rotation_at(local.center(), &frame).map_err(outside)?;
         let mut b = Aabb::EMPTY;
@@ -169,10 +169,10 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Pl
     Ok(Placed { frame, positions, normals, element_bounds, warnings })
 }
 
-/// (storey index, quadtree path) → content URI.
+/// (storey index, quadtree path) → content URI
 type TileUris = HashMap<(usize, String), String>;
 
-/// Writes a GLB for every node with content. Returns ((storey, path) → URI, total GLB size).
+/// Writes a GLB per node that has content. Returns the (storey, path) → URI map and the total GLB size
 fn write_tiles(
     output: &Path,
     trees: &[Node],
@@ -193,7 +193,7 @@ fn write_tiles(
                 continue;
             }
             let name = format!("{s:03}_{}", n.path);
-            // The element index within a tile (row of the property table) follows the order of the node's elements
+            // Element index in a tile (property table row) follows the node's element order
             let meshes: Vec<TileMesh> = n
                 .elements
                 .iter()

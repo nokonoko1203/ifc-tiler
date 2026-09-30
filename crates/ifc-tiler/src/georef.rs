@@ -1,22 +1,22 @@
-//! Resolution of the georeferencing.
+//! Georeferencing resolution
 //!
-//! From the raw values read from the IFC (`RawGeoref`) and the user's options (`GeorefOptions`),
-//! decides one way (`Placement`) to place the local coordinates (IFC world coordinates, m) on the globe.
-//! The priority is `--origin` → `--map-conversion` → `IfcMapConversion` → the latitude/longitude of `IfcSite`.
-//! CRSs are kept as strings; parsing and conversion are done in `geodesy` (PROJ).
+//! Picks one way (`Placement`) to put the local coordinates (IFC world coordinates, m) on the globe,
+//! from the raw values in the IFC (`RawGeoref`) and the user's options (`GeorefOptions`)
+//! The priority is `--origin` → `--map-conversion` → `IfcMapConversion` → the latitude/longitude of `IfcSite`
+//! CRSs are kept as strings; parsing and conversion are done in `geodesy` (PROJ)
 
-/// Raw georeferencing data read from the IFC. Lengths and angles are in the units written in the file.
+/// Raw georeferencing data read from the IFC. Lengths and angles are in the units written in the file
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RawGeoref {
     pub map_conversion: Option<MapConversion>,
     pub site: Option<SiteReference>,
-    /// `TrueNorth` of the model's 3D context (the direction of true north in the local XY plane).
+    /// `TrueNorth` of the model's 3D context (the direction of true north in the local XY plane)
     pub true_north: Option<[f64; 2]>,
-    /// Length unit of the project [m].
+    /// Project length unit [m]
     pub length_unit_m: f64,
 }
 
-/// `IfcMapConversion` / `IfcMapConversionScaled`.
+/// `IfcMapConversion` / `IfcMapConversionScaled`
 #[derive(Clone, Debug, PartialEq)]
 pub struct MapConversion {
     pub eastings: f64,
@@ -25,66 +25,66 @@ pub struct MapConversion {
     pub x_axis_abscissa: Option<f64>,
     pub x_axis_ordinate: Option<f64>,
     pub scale: Option<f64>,
-    /// Per-axis factors of `IfcMapConversionScaled`. 1 if absent.
+    /// Per-axis factors of `IfcMapConversionScaled`. 1 if absent
     pub factors: [f64; 3],
     pub target: Crs,
 }
 
-/// The target CRS (`IfcProjectedCRS`). Anything other than a projected CRS is read as `Missing`.
+/// Target CRS (`IfcProjectedCRS`); anything other than a projected CRS is read as `Missing`
 #[derive(Clone, Debug, PartialEq)]
 pub enum Crs {
     Projected { name: Option<String>, map_unit_m: Option<f64> },
     Missing,
 }
 
-/// `RefLatitude` / `RefLongitude` / `RefElevation` of `IfcSite`.
+/// `RefLatitude` / `RefLongitude` / `RefElevation` of `IfcSite`
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SiteReference {
     pub latitude_deg: Option<f64>,
     pub longitude_deg: Option<f64>,
-    /// In project length units.
+    /// In project length units
     pub elevation: Option<f64>,
 }
 
-/// The user's options.
+/// Options given by the user
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GeorefOptions {
     /// A CRS PROJ can parse (`EPSG:6677`, `EPSG:6677+6695`, …). On the map path it overrides the TargetCRS of
-    /// `IfcMapConversion`; on the ENU path it is the CRS of the origin's latitude, longitude and height.
+    /// `IfcMapConversion`; on the ENU path it is the CRS of the origin's latitude, longitude and height
     pub crs: Option<String>,
-    /// Latitude and longitude [degrees] and elevation [m].
+    /// Latitude and longitude [degrees] and elevation [m]
     pub origin: Option<[f64; 3]>,
-    /// Map coordinates of the local origin (easting, northing, elevation [m]) and the counterclockwise rotation of the local X axis from east [degrees]. Requires `--crs`.
+    /// Map coordinates of the local origin (easting, northing, elevation [m]) and the counterclockwise rotation of the local X axis from east [degrees]. Requires `--crs`
     pub map_conversion: Option<[f64; 4]>,
 }
 
-/// The CRS of the origin's latitude and longitude on the ENU path when there is no `--crs` (WGS84).
+/// CRS of the origin's latitude and longitude on the ENU path without `--crs` (WGS84)
 const DEFAULT_GEOGRAPHIC_CRS: &str = "EPSG:4326";
 
-/// A way to place local coordinates (m) on the globe.
+/// A way to place local coordinates (m) on the globe
 #[derive(Clone, Debug, PartialEq)]
 pub enum Placement {
-    /// Local coordinates → map coordinates (east, north) and elevation.
+    /// Local coordinates → map coordinates (east, north) and elevation
     Grid(GridPlacement),
-    /// East, north and height (ENU) around an origin.
+    /// East, north and height (ENU) around an origin
     Enu(EnuPlacement),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridPlacement {
-    /// The CRS of the map coordinates (a projected CRS; it may include a height reference).
+    /// The CRS of the map coordinates (a projected CRS; it may include a height reference)
     pub crs: String,
-    /// Map coordinates [m] and elevation [m] of the local origin.
+    /// Map coordinates [m] and elevation [m] of the local origin
     pub origin: [f64; 3],
-    /// Counterclockwise rotation of the local X axis from map east [rad].
+    /// Counterclockwise rotation of the local X axis from map east [rad]
     pub rotation: f64,
-    /// Scale applied to the local coordinates after conversion to metres.
+    /// Scale applied to the local coordinates after conversion to metres
     pub scale: f64,
     pub factors: [f64; 3],
 }
 
 impl GridPlacement {
-    /// Local coordinates [m] → (east, north, elevation) [m].
+    /// Local coordinates [m] → (east, north, elevation) [m]
     pub fn to_map(&self, p: [f64; 3]) -> [f64; 3] {
         let (s, c) = self.rotation.sin_cos();
         let x = self.scale * self.factors[0] * p[0];
@@ -96,34 +96,34 @@ impl GridPlacement {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnuPlacement {
-    /// The CRS of the origin's latitude, longitude and height (a geographic CRS; it may include a height reference).
+    /// The CRS of the origin's latitude, longitude and height (a geographic CRS; it may include a height reference)
     pub crs: String,
     pub latitude_deg: f64,
     pub longitude_deg: f64,
     pub orthometric_height: f64,
-    /// Counterclockwise rotation of the local X axis from east [rad].
+    /// Counterclockwise rotation of the local X axis from east [rad]
     pub rotation: f64,
 }
 
 impl EnuPlacement {
-    /// Local coordinates [m] → ENU around the origin [m].
+    /// Local coordinates [m] → ENU around the origin [m]
     pub fn to_enu(&self, p: [f64; 3]) -> [f64; 3] {
         let (s, c) = self.rotation.sin_cos();
         [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]]
     }
 }
 
-/// The result of the resolution.
+/// Resolved placement and warnings
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
     pub placement: Placement,
     pub warnings: Vec<String>,
 }
 
-/// When placing with ENU, warn if any geometry is farther than this from the local origin [m].
+/// With ENU placement, warn when geometry is farther than this from the local origin [m]
 const FAR_FROM_ORIGIN_M: f64 = 1000.0;
 
-/// Resolves the georeferencing. `reach_m` is the maximum horizontal distance of the geometry from the local origin.
+/// Resolves the georeferencing. `reach_m` is the maximum horizontal distance of the geometry from the local origin
 pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Resolved, String> {
     let mut warnings = Vec::new();
     let placement = if let Some([lat, lon, h]) = opts.origin {
@@ -179,7 +179,7 @@ fn map_conversion(
     }))
 }
 
-/// The map coordinate reference given by `--map-conversion`. Local coordinates (m) are used as is, with a scale of 1.
+/// Map coordinate reference from `--map-conversion`: local coordinates (m) are used as is (scale 1)
 fn given_map_conversion(
     raw: &RawGeoref,
     [e, n, h, rotation_deg]: [f64; 4],
@@ -199,8 +199,8 @@ fn given_map_conversion(
     }))
 }
 
-/// Decides the effective scale of `Scale`. If the effective scale is off by a factor of 100 or more and its inverse is 1,
-/// it is assumed to have been written as the inverse (as in some official samples) and the inverse is used.
+/// Effective scale for `Scale`. If it is off by a factor of 100 or more while its inverse is about 1,
+/// the value is assumed to have been written inverted (as in some official samples) and the inverse is used
 fn effective_scale(
     spec_scale: f64,
     scale: Option<f64>,
@@ -242,7 +242,7 @@ fn site_lat_lon(site: Option<&SiteReference>, warnings: &mut Vec<String>) -> Opt
 }
 
 /// East, north and height around the latitude/longitude of IfcSite. TrueNorth points north in the local XY plane,
-/// so the angle of the local X axis from east is 90° − atan2(ty, tx).
+/// so the angle of the local X axis from east is 90° − atan2(ty, tx)
 fn site(raw: &RawGeoref, lat: f64, lon: f64, elevation: f64, opts: &GeorefOptions) -> Placement {
     let rotation = raw.true_north.map_or(0.0, |[tx, ty]| std::f64::consts::FRAC_PI_2 - ty.atan2(tx));
     Placement::Enu(EnuPlacement {
@@ -258,8 +258,8 @@ fn geographic_crs(opts: &GeorefOptions) -> String {
     opts.crs.clone().unwrap_or_else(|| DEFAULT_GEOGRAPHIC_CRS.into())
 }
 
-/// Latitudes and longitudes of IfcSite that look like authoring-tool defaults [degrees]. The same values were seen in several unrelated files
-/// (values written in degrees, minutes, seconds and millionths of a second, converted to degrees).
+/// IfcSite latitudes and longitudes that look like authoring-tool defaults [degrees], seen in several unrelated files
+/// (converted from degrees, minutes, seconds and millionths of a second)
 const KNOWN_DEFAULTS: [(f64, f64, &str); 2] = [
     // (42,24,53,508911), (-71,-15,-29,-58837)
     (42.414_863_586_4, -71.258_071_899_2, "Revit's default location (Massachusetts, USA)"),
@@ -271,7 +271,7 @@ fn known_default(lat: f64, lon: f64) -> Option<&'static str> {
     KNOWN_DEFAULTS.iter().find(|(a, b, _)| (lat - a).abs() < 1e-6 && (lon - b).abs() < 1e-6).map(|&(_, _, w)| w)
 }
 
-/// Decides the CRS of the map coordinates. `--crs` takes priority; otherwise the EPSG code is read from the IFC's CRS name.
+/// CRS of the map coordinates: `--crs` if given, otherwise the EPSG code in the IFC's CRS name
 fn crs_for(override_crs: Option<&str>, name: Option<&str>) -> Result<String, String> {
     if let Some(c) = override_crs {
         return Ok(c.to_string());
@@ -281,7 +281,7 @@ fn crs_for(override_crs: Option<&str>, name: Option<&str>) -> Result<String, Str
         .ok_or_else(|| format!("unknown CRS ({}); specify it with --crs EPSG:xxxx", name.unwrap_or("no name")))
 }
 
-/// Extracts the code from `EPSG:6677`, `EPSG: 6677`, `urn:ogc:def:crs:EPSG::6677` and the like.
+/// Extracts the code from `EPSG:6677`, `EPSG: 6677`, `urn:ogc:def:crs:EPSG::6677` and the like
 fn parse_epsg(s: &str) -> Option<u32> {
     let upper = s.to_ascii_uppercase();
     let rest = &upper[upper.find("EPSG")? + 4..];

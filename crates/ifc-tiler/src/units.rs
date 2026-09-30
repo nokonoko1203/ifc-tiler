@@ -1,10 +1,10 @@
-//! Conversion from project units to SI units.
+//! Conversion from project units to SI units
 //!
-//! IFC property values and quantities are written in the units declared by the file (e.g. millimetres).
-//! The 3D Tiles columns use SI units (m, m², m³, kg), so the kind of quantity is determined from the value type
-//! and multiplied by the project unit's conversion factor.
+//! IFC property values and quantities keep the units declared by the file (e.g. millimetres)
+//! 3D Tiles columns are in SI units (m, m², m³, kg), so the kind of quantity is inferred from the value type
+//! and multiplied by the project unit's conversion factor
 
-/// Kinds of quantities converted to SI units.
+/// Kinds of quantities converted to SI units
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Quantity {
     Length,
@@ -14,7 +14,7 @@ pub enum Quantity {
 }
 
 impl Quantity {
-    /// Determines the kind of quantity from a property value type (e.g. `IFCLENGTHMEASURE`).
+    /// Kind of quantity for a property value type (e.g. `IFCLENGTHMEASURE`)
     pub fn of_measure(value_type: &str) -> Option<Self> {
         let t = value_type.to_ascii_uppercase();
         match t.strip_prefix("IFC").unwrap_or(&t) {
@@ -26,7 +26,7 @@ impl Quantity {
         }
     }
 
-    /// Determines the kind of quantity from a quantity type name (e.g. `IfcQuantityLength`).
+    /// Kind of quantity for a quantity type name (e.g. `IfcQuantityLength`)
     pub fn of_quantity_kind(kind: &str) -> Option<Self> {
         match kind {
             "Length" => Some(Self::Length),
@@ -47,7 +47,7 @@ impl Quantity {
     }
 }
 
-/// Multiplying a value in project units by this factor gives SI units.
+/// Multiplying a value in project units by this factor gives SI units
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitScales {
     pub length: f64,

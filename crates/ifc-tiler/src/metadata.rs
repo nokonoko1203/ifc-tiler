@@ -1,8 +1,8 @@
-//! Columns of the element metadata (the class and property table of `EXT_structural_metadata`).
+//! Columns of the element metadata (the class and property table of `EXT_structural_metadata`)
 //!
-//! One `element` class is created for the whole tileset, and column types are decided by looking at the values of all elements.
-//! Each GLB only gets the columns that have at least one value in that tile (3d-tiles-validator requires
-//! all columns of the class to be in the property table, and a string column that is empty for every element cannot be encoded).
+//! One `element` class covers the whole tileset, and column types are decided from the values of all elements
+//! Each GLB only gets columns with at least one value in that tile (3d-tiles-validator requires
+//! every column of the class to be in the property table, and a string column that is empty for all elements cannot be encoded)
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -10,7 +10,7 @@ use serde_json::{Map, Value as Json, json};
 
 use crate::units::{Quantity, UnitScales};
 
-/// A value of `IfcLogical` (IfcBoolean / IfcLogical).
+/// A value of `IfcLogical` (IfcBoolean / IfcLogical)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Logical {
     False,
@@ -18,7 +18,7 @@ pub enum Logical {
     Unknown,
 }
 
-/// A single property value.
+/// A single property value
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Logical(Logical),
@@ -40,17 +40,17 @@ impl Value {
     }
 }
 
-/// One entry of a Pset / Qto.
+/// One entry of a Pset / Qto
 #[derive(Clone, Debug, PartialEq)]
 pub struct Property {
     pub set: String,
     pub name: String,
     pub value: Value,
-    /// The value is a measure of this quantity and is written in project units.
+    /// Set if the value measures this quantity, in project units
     pub quantity: Option<Quantity>,
 }
 
-/// The values of one element (fixed columns and Pset / Qto).
+/// The values of one element (fixed columns and Pset / Qto)
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ElementRecord {
     pub express_id: u32,
@@ -71,7 +71,7 @@ pub struct ElementRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Uint32,
-    /// Integer. INT64 is not used because CesiumJS returns it as a BigInt, which does not match noData (a JSON number).
+    /// Integer. INT64 is avoided because CesiumJS returns it as a BigInt, which never matches noData (a JSON number)
     Int32,
     Float64,
     Text,
@@ -86,7 +86,7 @@ const LOGICAL_NOT_SET: u8 = 255;
 #[derive(Clone, Debug, PartialEq)]
 struct Column {
     id: String,
-    /// The original name (`Pset name.property name`). `None` if it is the same as the ID.
+    /// Original name (`Pset name.property name`), `None` if identical to the ID
     name: Option<String>,
     description: Option<String>,
     semantic: Option<&'static str>,
@@ -140,7 +140,7 @@ impl Column {
     }
 }
 
-/// Columns and values of all elements. `rows[i][j]` is the value of column `j` of element `i`.
+/// Columns and values of all elements. `rows[i][j]` is the value of column `j` of element `i`
 #[derive(Clone, Debug, PartialEq)]
 pub struct Table {
     columns: Vec<Column>,
@@ -181,7 +181,7 @@ fn fixed_values(e: &ElementRecord) -> [Option<Value>; 12] {
 }
 
 impl Table {
-    /// Decides the columns and converts the values to SI units.
+    /// Decides the columns and converts values to SI units
     pub fn build(elements: &[ElementRecord], units: &UnitScales) -> Self {
         let mut columns: Vec<Column> = FIXED
             .iter()
@@ -242,7 +242,7 @@ impl Table {
         Self { columns, rows }
     }
 
-    /// The class with all columns, which goes into the `schema` of tileset.json.
+    /// Class with all columns, for the `schema` of tileset.json
     pub fn full_class(&self) -> Json {
         let props: Map<String, Json> = self.columns.iter().map(|c| (c.id.clone(), c.class_property())).collect();
         json!({ "name": "IFC element", "properties": props })
@@ -252,9 +252,9 @@ impl Table {
         self.columns.iter().any(|c| c.kind == Kind::Logical)
     }
 
-    /// Encodes one tile's worth (in the order of the element row numbers `rows`).
-    /// `add_view` registers a byte sequence as a bufferView and returns its index.
-    /// Returns (the tile's class, property table).
+    /// Encodes one tile (elements in the order of `rows`)
+    /// `add_view` registers bytes as a bufferView and returns its index
+    /// Returns the tile's class and property table
     pub fn encode(&self, rows: &[usize], add_view: &mut dyn FnMut(Vec<u8>) -> usize) -> (Json, Json) {
         let mut class_props = Map::new();
         let mut table_props = Map::new();
@@ -364,12 +364,12 @@ fn coerce(v: Value, kind: Kind) -> Value {
     }
 }
 
-/// Fits `Pset name__property name` to the metadata ID rule (`^[a-zA-Z_][a-zA-Z0-9_]*$`).
+/// Fits `Pset name__property name` to the metadata ID rule (`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 fn property_id(set: &str, name: &str) -> String {
     let raw = format!("{set}__{name}");
     let ascii = raw.chars().filter(char::is_ascii_alphanumeric).count();
     if ascii * 2 < raw.chars().count() {
-        // Names such as Japanese ones cannot be told apart once replaced, so they are hashed
+        // Names such as Japanese ones would collide after replacement, so they are hashed
         return format!("p_{:08x}", fnv1a(&format!("{set}.{name}")));
     }
     let mut id: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
@@ -523,14 +523,14 @@ mod tests {
 
     #[test]
     fn integers_outside_int32_become_float64() {
-        // INT64 is not used because CesiumJS returns it as a BigInt and noData has no effect
+        // INT64 is avoided because CesiumJS returns a BigInt and noData does not apply
         let e = |id, n| element(id, vec![prop("P", "n", Value::Int(n), None)]);
         let kind = |t: &Table| t.columns.iter().find(|c| c.id == "P__n").unwrap().kind;
         let wide = Table::build(&[e(1, 1), e(2, 1 << 40)], &UnitScales::default());
         assert_eq!(kind(&wide), Kind::Float64);
         let j = wide.columns.iter().position(|c| c.id == "P__n").unwrap();
         assert_eq!(wide.rows[1][j], Some(Value::Real((1i64 << 40) as f64)));
-        // A value equal to noData (i32::MIN) cannot be distinguished, so FLOAT64 is used
+        // A value equal to noData (i32::MIN) would be indistinguishable, so FLOAT64 is used
         let min = Table::build(&[e(1, i64::from(i32::MIN))], &UnitScales::default());
         assert_eq!(kind(&min), Kind::Float64);
         let max = Table::build(&[e(1, i64::from(i32::MAX))], &UnitScales::default());

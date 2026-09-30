@@ -1,10 +1,10 @@
-//! Tile splitting. The elements of one storey are divided by a planar quadtree, and larger elements go in higher tiles (ADD).
+//! Tile splitting: a planar quadtree per storey, with larger elements in higher tiles (ADD)
 //!
 //! Each node keeps the elements whose diagonal is at least 1/4 of the node's planar extent (up to `max_features`),
-//! and splits the rest into four by centroid. The node's geometricError is the largest diagonal among the elements pushed to descendants.
-//! From far away only large elements are drawn, and smaller ones are added as the camera approaches.
+//! and splits the rest into four by centroid. The node's geometricError is the largest diagonal among the elements pushed to descendants
+//! Far away only large elements are drawn; smaller ones are added as the camera gets closer
 
-/// Axis-aligned bounding box.
+/// Axis-aligned bounding box
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
     pub min: [f64; 3],
@@ -21,7 +21,7 @@ impl Aabb {
         }
     }
 
-    /// Bounding box of a sequence of points. `EMPTY` if there are none.
+    /// Bounding box of the points, or `EMPTY` if there are none
     pub fn from_points(points: impl IntoIterator<Item = [f64; 3]>) -> Self {
         let mut b = Self::EMPTY;
         points.into_iter().for_each(|p| b.add(p));
@@ -47,22 +47,22 @@ impl Aabb {
     }
 }
 
-/// A node of the tile tree.
+/// A node of the tile tree
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
-    /// Quadtree path (`r` for the root, `r0`–`r3`… for children).
+    /// Quadtree path (`r` for the root, `r0`–`r3`… for children)
     pub path: String,
-    /// Elements placed in this node's content (indices of the caller).
+    /// Elements placed in this node's content (indices of the caller)
     pub elements: Vec<usize>,
     pub geometric_error: f64,
-    /// Bounding box of all elements of this node and its descendants.
+    /// Bounding box of all elements of this node and its descendants
     pub bounds: Aabb,
     pub children: Vec<Node>,
 }
 
 const MAX_DEPTH: usize = 10;
 
-/// `items` are (element index, bounding box).
+/// `items` are (element index, bounding box)
 pub fn build(items: &[(usize, Aabb)], max_features: usize) -> Node {
     node(items.to_vec(), "r".into(), 0, max_features.max(1))
 }

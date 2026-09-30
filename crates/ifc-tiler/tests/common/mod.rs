@@ -1,4 +1,4 @@
-//! Shared parts of the integration tests: reads the output tileset back (including meshopt decoding).
+//! Shared helpers for the integration tests: reads the output tileset back, including meshopt decoding
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ pub fn out_dir(name: &str) -> PathBuf {
     out
 }
 
-/// An element read back from the output (its properties and ECEF vertices).
+/// An element read back from the output, with its properties and ECEF vertices
 pub struct Feature {
     pub props: BTreeMap<String, Value>,
     pub ecef: Vec<[f64; 3]>,
@@ -44,7 +44,7 @@ fn collect(tile: &Value, uris: &mut Vec<String>) {
 }
 
 unsafe extern "C" {
-    // Filter decoding of the bundled meshoptimizer, which the meshopt crate does not expose
+    // Filter decoding from the bundled meshoptimizer; the meshopt crate does not expose it
     fn meshopt_decodeFilterOct(buffer: *mut std::ffi::c_void, count: usize, stride: usize);
 }
 
@@ -52,7 +52,7 @@ fn u(v: &Value) -> usize {
     v.as_u64().unwrap() as usize
 }
 
-/// The bytes of a bufferView (decoded if it uses meshopt).
+/// Bytes of a bufferView, decoded if it uses meshopt
 fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
     let v = &js["bufferViews"][i];
     if let Some(m) = v["extensions"].get("EXT_meshopt_compression") {
@@ -118,7 +118,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
             f.props.insert(id.clone(), v);
         }
     }
-    // Look at every node. For an instanced node, apply translation + scale per instance; the element index is an attribute of the instance
+    // Visit every node. An instanced node applies translation + scale per instance, and its element index is an instance attribute
     for node in js["nodes"].as_array().unwrap() {
         let matrix: Vec<f64> = node["matrix"]
             .as_array()
@@ -131,7 +131,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 .collect()
         };
         let inst = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
-        // (translation, scale, element index). A single entry if not instanced, in which case the element index is a vertex attribute
+        // (translation, scale, element index); a single entry if not instanced, where the element index is a vertex attribute
         let placements: Vec<([f64; 3], [f64; 3], Option<usize>)> = if inst.is_object() {
             let t = floats(&inst["TRANSLATION"]);
             let s = floats(&inst["SCALE"]);

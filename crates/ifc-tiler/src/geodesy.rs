@@ -1,15 +1,15 @@
-//! Conversion from local coordinates to earth-centered earth-fixed (ECEF) coordinates, and the root ENU frame the tiles are placed in.
+//! Local coordinates → ECEF conversion, and the root ENU frame the tiles sit in
 //!
-//! PROJ converts map coordinates and latitude/longitude to ECEF (any CRS that can be expressed as an EPSG code works).
-//! On the map path every vertex is converted. Even within a building, approximating with a tangent plane (ENU)
-//! would be off by a few centimetres per 100 m because of meridian convergence.
+//! PROJ converts map coordinates and latitude/longitude to ECEF (any CRS expressible as an EPSG code works)
+//! On the map path every vertex is converted; even within a building, a tangent plane (ENU) approximation
+//! would drift a few centimetres per 100 m because of meridian convergence
 
 use geocentric::{geocentric_to_geodetic, geodetic_to_geocentric};
 
 use crate::georef::Placement;
 use crate::proj::{Context, Kind, Object};
 
-/// WGS84 (the ellipsoid of `EPSG:4978`).
+/// WGS84 (the ellipsoid of `EPSG:4978`)
 const A: f64 = 6_378_137.0;
 const INV_F: f64 = 298.257_223_563;
 
@@ -18,27 +18,27 @@ fn e_sq() -> f64 {
     f * (2.0 - f)
 }
 
-/// Height reference used when the CRS has no vertical part (EGM2008 height).
+/// Height reference used when the CRS has no vertical part (EGM2008 height)
 const DEFAULT_VERTICAL_CRS: &str = "EPSG:3855";
 
-/// The transformation, its warnings, and the ECEF of the reference point (`None` if it cannot be transformed).
+/// The transformation, its warnings, and the ECEF of the reference point (`None` if it cannot be transformed)
 type Attempt = (Projector, Vec<String>, Option<[f64; 3]>);
 
-/// Local coordinates [m] → ECEF [m].
+/// Local coordinates [m] → ECEF [m]
 pub struct Projector {
-    /// Input CRS → `EPSG:4978`. The axis order is normalized to (east, north) or (longitude, latitude).
+    /// Input CRS → `EPSG:4978`. The axis order is normalized to (east, north) or (longitude, latitude)
     pj: Object,
     placement: Placement,
-    /// ECEF origin and basis of the ENU path.
+    /// ECEF origin and basis of the ENU path
     enu: Option<Frame>,
 }
 
 impl Projector {
-    /// The second return value holds the warnings.
+    /// Also returns warnings
     ///
-    /// Like point-tiler, grids (geoids etc.) are downloaded from cdn.proj.org and cached.
+    /// Like point-tiler, grids (geoids etc.) are downloaded from cdn.proj.org and cached
     /// If they cannot be downloaded the transformation itself fails, so it is rebuilt with the network disabled
-    /// to let PROJ pick an approximate transformation that does not use grids (the approximation is reported as a warning).
+    /// to let PROJ pick an approximate transformation that does not use grids (the approximation is reported as a warning)
     pub fn new(placement: &Placement) -> Result<(Self, Vec<String>), String> {
         let reference = match placement {
             Placement::Grid(g) => g.to_map([0.0; 3]),
@@ -67,7 +67,7 @@ impl Projector {
         Ok((p, warnings))
     }
 
-    /// Builds the transformation and tries to transform the reference point. The third value is `None` if that fails.
+    /// Builds the transformation and tries to transform the reference point. The third value is `None` if that fails
     fn with_network(placement: &Placement, network: bool, reference: [f64; 3]) -> Result<Attempt, String> {
         let mut warnings = Vec::new();
         let ctx = Context::new().ok_or("cannot create a PROJ context")?;
@@ -83,7 +83,7 @@ impl Projector {
         self.pj.trans(p)
     }
 
-    /// The name of the last transformation if it was an approximation that does not use grids (ballpark).
+    /// Name of the last transformation if it was a grid-free approximation (ballpark)
     fn last_ballpark(&self) -> Option<String> {
         // A transformation with a single candidate has no last-used operation, so look at the transformation itself
         let last = self.pj.last_used_operation();
@@ -91,7 +91,7 @@ impl Projector {
         op.has_ballpark_transformation().then(|| op.name())
     }
 
-    /// Local coordinates [m] → ECEF [m]. If the map coordinates cannot be transformed, returns those map coordinates.
+    /// Local coordinates [m] → ECEF [m]. Returns the map coordinates as the error if they cannot be transformed
     pub fn to_ecef(&self, p: [f64; 3]) -> Result<[f64; 3], [f64; 3]> {
         match (&self.placement, &self.enu) {
             (Placement::Enu(e), Some(frame)) => Ok(frame.to_ecef(e.to_enu(p))),
@@ -103,7 +103,7 @@ impl Projector {
         }
     }
 
-    /// The rotation near point `c` that maps the orientation of local coordinates to that of `frame` (the columns are where the local x, y and z axes go).
+    /// Rotation near point `c` from the local axes to the axes of `frame` (columns are where the local x, y and z axes go)
     pub fn rotation_at(&self, c: [f64; 3], frame: &Frame) -> Result<[[f64; 3]; 3], [f64; 3]> {
         let o = frame.to_local(self.to_ecef(c)?);
         let axis = |i: usize| {
@@ -115,7 +115,7 @@ impl Projector {
     }
 }
 
-/// Builds the transformation input CRS → `EPSG:4978`. If there is no vertical CRS, heights are treated as EGM2008 heights.
+/// Builds the transformation input CRS → `EPSG:4978`. If there is no vertical CRS, heights are treated as EGM2008 heights
 fn source_to_ecef(ctx: &Context, placement: &Placement, warnings: &mut Vec<String>) -> Result<Object, String> {
     let (crs, want_projected) = match placement {
         Placement::Grid(g) => (g.crs.as_str(), true),
@@ -156,7 +156,7 @@ fn source_to_ecef(ctx: &Context, placement: &Placement, warnings: &mut Vec<Strin
     op.normalize_for_visualization().ok_or_else(|| format!("cannot normalize the axis order of {crs}"))
 }
 
-/// ECEF → [latitude, longitude, ellipsoidal height].
+/// ECEF → [latitude, longitude, ellipsoidal height]
 fn to_geodetic(p: [f64; 3]) -> [f64; 3] {
     let (lon, lat, h) = geocentric_to_geodetic(A, e_sq(), p[0], p[1], p[2]);
     [lat, lon, h]
@@ -167,11 +167,11 @@ fn geodetic(lat: f64, lon: f64, h: f64) -> [f64; 3] {
     [x, y, z]
 }
 
-/// An orthogonal east-north-up frame with an ECEF point as its origin.
+/// East-north-up frame with an ECEF point as its origin
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     origin: [f64; 3],
-    /// Unit vectors of east, north and up (ECEF).
+    /// Unit vectors of east, north and up (ECEF)
     basis: [[f64; 3]; 3],
 }
 
@@ -200,7 +200,7 @@ impl Frame {
         self.basis.map(|b| dot(b, d))
     }
 
-    /// 4×4 matrix from frame coordinates to ECEF (column-major; the `transform` of tileset.json).
+    /// 4×4 matrix from frame coordinates to ECEF (column-major; the `transform` of tileset.json)
     pub fn transform(&self) -> [f64; 16] {
         let [e, n, u] = self.basis;
         let o = self.origin;
@@ -221,7 +221,7 @@ fn normalize(a: [f64; 3]) -> [f64; 3] {
     a.map(|v| v / l)
 }
 
-/// Gram–Schmidt orthogonalization.
+/// Gram–Schmidt orthogonalization
 fn orthonormalize([x, y, _]: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let x = normalize(x);
     let d = dot(y, x);
@@ -230,7 +230,7 @@ fn orthonormalize([x, y, _]: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     [x, y, z]
 }
 
-/// Applies a rotation (an array of column vectors) to a vector.
+/// Applies a rotation (an array of column vectors) to a vector
 pub fn rotate(r: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|i| r[0][i] * v[0] + r[1][i] * v[1] + r[2][i] * v[2])
 }
@@ -296,7 +296,7 @@ mod tests {
     }
 
     /// Example from GeographicLib GeoConvert(1): 38n 444500 3688500 → 33:20:03.25N 044:24:13.06E
-    /// (https://geographiclib.sourceforge.io/C++/doc/GeoConvert.1.html). Allows for the rounding of the seconds (0.005″ ≈ 0.15 m).
+    /// (https://geographiclib.sourceforge.io/C++/doc/GeoConvert.1.html). Allows for the rounding of the seconds (0.005″ ≈ 0.15 m)
     #[test]
     fn utm_matches_geographiclib() {
         let (p, _) = Projector::new(&grid("EPSG:32638", [444_500.0, 3_688_500.0, 0.0])).unwrap();
@@ -307,7 +307,7 @@ mod tests {
     }
 
     /// One line of GeographicLib's test data GeoidHeights.dat (values computed from NGA's spherical harmonics):
-    /// 47.2612 8.32186 → EGM2008 48.0227 m. PROJ interpolates a 2.5′ grid, so a difference of a few centimetres is allowed.
+    /// 47.2612 8.32186 → EGM2008 48.0227 m. PROJ interpolates a 2.5′ grid, so a difference of a few centimetres is allowed
     #[test]
     fn egm2008_matches_geographiclib() {
         let (p, warnings) = Projector::new(&enu("EPSG:4326", 47.2612, 8.32186, 0.0)).unwrap();
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn rotation_in_grid_includes_meridian_convergence() {
-        // At the known point in zone IX (west of the central meridian) the meridian convergence is 0.038616667°.
+        // At the known point in zone IX (west of the central meridian) the meridian convergence is 0.038616667°
         // Map east (local +X) is rotated counterclockwise (toward north) from true east by that angle
         let (p, _) = Projector::new(&grid("EPSG:10170", [EAST, NORTH, 3.0])).unwrap();
         let frame = Frame::at_ecef(p.to_ecef([0.0; 3]).unwrap());
