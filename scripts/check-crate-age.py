@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
-UA = "ifc2tiles-dev (scripts/check-crate-age.py)"
+UA = "ifc-tiler-dev (scripts/check-crate-age.py)"
 
 
 def published_at(name: str, version: str) -> dt.datetime:

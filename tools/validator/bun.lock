@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ifc2tiles-validator",
+      "name": "ifc-tiler-validator",
       "dependencies": {
         "3d-tiles-validator": "0.6.1",
       },

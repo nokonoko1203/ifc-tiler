@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::geodesy::{Frame, GeoidModel, Projector, rotate};
 use crate::georef::{GeorefOptions, Placement, Resolved};
-use crate::glb::{TileMesh, TileMetadata};
+use crate::glb::{Encoding, TileMesh, TileMetadata};
 use crate::metadata::Table;
 use crate::report::{Report, TileReport};
 use crate::semantics::{Semantics, SemanticsOptions};
@@ -41,6 +41,8 @@ pub struct Options {
     pub keep_parts: bool,
     pub include_properties: bool,
     pub compress: bool,
+    /// タイル内の同形メッシュをインスタンス化する。
+    pub instancing: bool,
 }
 
 #[derive(Debug)]
@@ -73,7 +75,7 @@ fn outside([e, n, _]: [f64; 3]) -> Error {
     ))
 }
 
-/// `input`のIFCを変換し、`output`にtileset.json・tiles/*.glb・ifc2tiles-report.jsonを書く。
+/// `input`のIFCを変換し、`output`にtileset.json・tiles/*.glb・ifc-tiler-report.jsonを書く。
 pub fn convert(input: &Path, output: &Path, opts: &Options) -> Result<Report, Error> {
     let t0 = Instant::now();
     let bytes = fs::read(input).map_err(|e| Error::Input(format!("{}: {e}", input.display())))?;
@@ -107,7 +109,8 @@ pub fn convert(input: &Path, output: &Path, opts: &Options) -> Result<Report, Er
         .collect();
     let t_convert = t0.elapsed().as_millis();
 
-    let (uris, tiles) = write_tiles(output, &trees, &model, &sem, &placed, &table, opts.compress)?;
+    let enc = Encoding { compress: opts.compress, instancing: opts.instancing };
+    let (uris, tiles) = write_tiles(output, &trees, &model, &sem, &placed, &table, enc)?;
     let conversion = conversion_json(&resolved, opts, &placed.frame, &placed.warnings);
     let bounds = placed.element_bounds.iter().fold(Aabb::EMPTY, |a, b| a.union(b));
     let uri = |s: usize, n: &Node| uris.get(&(s, n.path.clone())).cloned();
@@ -132,7 +135,7 @@ pub fn convert(input: &Path, output: &Path, opts: &Options) -> Result<Report, Er
     report.timing_ms.insert("convert", t_convert - t_read);
     report.timing_ms.insert("write", t0.elapsed().as_millis() - t_convert);
     report.timing_ms.insert("total", t0.elapsed().as_millis());
-    let report_path = output.join("ifc2tiles-report.json");
+    let report_path = output.join("ifc-tiler-report.json");
     fs::write(&report_path, serde_json::to_vec_pretty(&report.to_json()).expect("レポートのJSON化"))
         .map_err(io(&report_path))?;
     Ok(report)
@@ -207,7 +210,7 @@ fn write_tiles(
     sem: &Semantics,
     placed: &Placed,
     table: &Table,
-    compress: bool,
+    enc: Encoding,
 ) -> Result<(TileUris, Vec<TileReport>), Error> {
     let tiles_dir = output.join("tiles");
     fs::create_dir_all(&tiles_dir).map_err(io(&tiles_dir))?;
@@ -235,13 +238,19 @@ fn write_tiles(
                     indices: &model.meshes[mi].indices,
                 })
                 .collect();
-            let schema_id = format!("ifc2tiles_{name}");
-            let bytes =
-                glb::write(&meshes, &TileMetadata { table, rows: &n.elements, schema_id: &schema_id }, compress);
+            let schema_id = format!("ifc_tiler_{name}");
+            let (bytes, stats) =
+                glb::write(&meshes, &TileMetadata { table, rows: &n.elements, schema_id: &schema_id }, enc);
             let uri = format!("tiles/{name}.glb");
             let path = output.join(&uri);
             fs::write(&path, &bytes).map_err(io(&path))?;
-            reports.push(TileReport { uri: uri.clone(), features: n.elements.len(), bytes: bytes.len() });
+            reports.push(TileReport {
+                uri: uri.clone(),
+                features: n.elements.len(),
+                bytes: bytes.len(),
+                primitives: stats.primitives,
+                instances: stats.instances,
+            });
             uris.insert((s, n.path.clone()), uri);
         }
     }
@@ -267,6 +276,7 @@ fn conversion_json(resolved: &Resolved, opts: &Options, frame: &Frame, warnings:
         "geoid": opts.geoid.name(),
         "rootOrigin": { "latitude": lat, "longitude": lon, "ellipsoidalHeight": h },
         "compress": opts.compress,
+        "instancing": opts.instancing,
         "maxFeatures": opts.max_features,
         "warnings": warnings,
     })

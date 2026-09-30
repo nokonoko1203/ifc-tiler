@@ -1,10 +1,15 @@
 [package]
-name = "ifc2tiles"
+name = "ifc-tiler"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "IFCを部材情報付きの3D Tiles 1.1へ変換するCLI"
 publish = false
+
+# 実行ファイル名は point-tiler（point_tiler）に合わせる
+[[bin]]
+name = "ifc_tiler"
+path = "src/main.rs"
 
 [dependencies]
 # 版は公開から3日以上たったものを完全一致で固定する（scripts/check-crate-age.py で検査）

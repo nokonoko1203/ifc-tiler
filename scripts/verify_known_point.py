@@ -4,7 +4,7 @@
         [--geoid jpgeo2024|gsigeo2011] [--tolerance-m 0.01]
 
 期待値は testdata/handmade/expected.json（国土地理院の計算結果）。meshopt圧縮は読めないので、
-ifc2tiles は --no-compress で変換しておく（圧縮した出力の既知点はRustの結合テストで確かめる）。
+ifc_tiler は --no-compress で変換しておく（圧縮した出力の既知点はRustの結合テストで確かめる）。
 立方体（名前「既知点立方体」）の底面の頂点のうち、IX系で E+N が最小の角を局所原点とみなす。
 """
 

@@ -499,7 +499,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ifc2tiles"
+name = "ifc-tiler"
 version = "0.1.0"
 dependencies = [
  "clap",

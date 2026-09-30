@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # testdata の全IFCを変換し、validatorにかけて、1行1ファイルのJSONで結果を出す（受け入れ条件A3）。
 # ジオリファレンスが使えないファイル（終了コード2）は --origin（東京駅付近）で再試行する。
-#   scripts/batch-convert.sh [ifc2tilesのパス] > out/batch.jsonl
+#   scripts/batch-convert.sh [ifc_tilerのパス] > out/batch.jsonl
 set -uo pipefail
 cd "$(dirname "$0")/.."
-bin="${1:-target/release/ifc2tiles}"
+bin="${1:-target/release/ifc_tiler}"
 outroot=out/batch
 rm -rf "$outroot"; mkdir -p "$outroot"
 find testdata/handmade testdata/external/spec testdata/external/cert testdata/external/ifclite -name '*.ifc' -print0 | sort -z |
@@ -27,7 +27,7 @@ while IFS= read -r -d '' f; do
   python3 - "$f" "$out" "$mode" "$errs" "$out.log" "$warns" <<'PY'
 import json, sys, os
 f, out, mode, errs, log, warns = sys.argv[1:]
-r = json.load(open(os.path.join(out, "ifc2tiles-report.json")))
+r = json.load(open(os.path.join(out, "ifc-tiler-report.json")))
 print(json.dumps({"file": f, "ok": True, "mode": mode, "validator_errors": int(errs), "validator_warnings": int(warns), "elements": r["elements"], "excluded": r["excluded"],
   "without_mesh": r["withoutMesh"], "columns": r["columns"], "tiles": len(r["tiles"]), "bytes": r["totalBytes"],
   "ms": r["timingMs"], "warnings": r["warnings"], "source": r["conversion"]["source"], "placement": r["conversion"]["placement"]["kind"]}, ensure_ascii=False))

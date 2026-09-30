@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 自作IFCを変換し、validator と既知点の検算をまとめて行う（受け入れ条件A1・A2）。
-#   scripts/acceptance-handmade.sh [ifc2tilesのパス]
+# 自作IFCを変換し、validator と既知点の検算をまとめて行う（受け入れ条件A1・A2・A11）。
+#   scripts/acceptance-handmade.sh [ifc_tilerのパス]
 # 既知点はpyprojで独立に検算するため --no-compress で変換する。圧縮した出力もvalidatorにかける。
 set -uo pipefail
 cd "$(dirname "$0")/.."
-bin="${1:-target/release/ifc2tiles}"
+bin="${1:-target/release/ifc_tiler}"
 fail=0
 run() { # name input expect(ok|ng) [args...]
   local name=$1 input=$2 expect=$3; shift 3
@@ -22,7 +22,7 @@ run() { # name input expect(ok|ng) [args...]
   res=$(uv run -q --no-project --python 3.12 --with pyproj scripts/verify_known_point.py "$out/tileset.json")
   local ok; ok=$(echo "$res" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["ok"])')
   local diff; diff=$(echo "$res" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read())["diff_m"]; print(d)')
-  local warns; warns=$(python3 -c "import json; print(len(json.load(open('$out/ifc2tiles-report.json'))['conversion']['warnings']))")
+  local warns; warns=$(python3 -c "import json; print(len(json.load(open('$out/ifc-tiler-report.json'))['conversion']['warnings']))")
   local got=ng; [[ "$ok" == True ]] && got=ok
   local status=PASS; { [[ "$errs" != 0 ]] || [[ "$got" != "$expect" ]]; } && { status=FAIL; fail=1; }
   echo "$status $name validator_errors=$errs known_point=$got(expected $expect) diff_m=$diff warnings=$warns"
@@ -33,4 +33,5 @@ run mapconv_gsigeo2011_mismatch ifc4_map_conversion.ifc ng --geoid gsigeo2011
 run site_latlon ifc2x3_site_latlon.ifc ok
 run plateau_grid ifc2x3_plateau_origin.ifc ok --site-coords grid --crs EPSG:6677
 run plateau_enu_wrong ifc2x3_plateau_origin.ifc ng
+run plateau_map_conversion ifc2x3_plateau_origin.ifc ok --map-conversion 0,0 --crs EPSG:6677
 exit $fail

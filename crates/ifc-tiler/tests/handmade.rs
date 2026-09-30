@@ -8,9 +8,9 @@ mod common;
 use std::path::PathBuf;
 
 use common::{Feature, options, out_dir, read_tileset, root};
-use ifc2tiles::geodesy::GeoidModel;
-use ifc2tiles::georef::SiteCoords;
-use ifc2tiles::{Options, convert};
+use ifc_tiler::geodesy::GeoidModel;
+use ifc_tiler::georef::SiteCoords;
+use ifc_tiler::{Options, convert};
 use serde_json::Value;
 
 const CUBE: &str = "既知点立方体";
@@ -78,6 +78,40 @@ fn plateau_grid_known_point_and_enu_mistake() {
     let r = convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &options()).unwrap();
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert!(cube_error(&read_tileset(&out), "geoid_height_jpgeo2024_m") > 100.0);
+}
+
+/// 受け入れ条件A11: 局所座標が平面直角座標の値のIFCを、`--map-conversion 0,0 --crs`だけで置ける。
+#[test]
+fn map_conversion_option_places_plan_coordinates() {
+    let mut opts = options();
+    opts.georef.map_conversion = Some([0.0, 0.0, 0.0, 0.0]);
+    opts.georef.crs_epsg = Some(6677);
+    let f = read_tileset(&run("ifc2x3_plateau_origin.ifc", "plateau_map_conversion", &opts));
+    assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
+
+    opts.georef.crs_epsg = None;
+    let out = out_dir("handmade/map_conversion_no_crs");
+    let e = convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &opts).unwrap_err();
+    assert!(matches!(e, ifc_tiler::Error::Input(_)), "{e}");
+}
+
+/// `--map-conversion`は`--origin`・`--site-coords grid`と同時に指定できない（終了コード2）。
+#[test]
+fn map_conversion_conflicts_are_input_errors() {
+    let input = root().join("testdata/handmade/ifc2x3_plateau_origin.ifc");
+    for extra in [&["--origin", "35,139"][..], &["--site-coords", "grid"][..]] {
+        let out = out_dir("handmade/map_conversion_conflict");
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_ifc_tiler"))
+            .arg(&input)
+            .arg("-o")
+            .arg(&out)
+            .args(["--map-conversion", "0,0", "--crs", "EPSG:6677"])
+            .args(extra)
+            .output()
+            .unwrap()
+            .status;
+        assert_eq!(status.code(), Some(2), "{extra:?}");
+    }
 }
 
 #[test]

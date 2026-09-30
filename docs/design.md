@@ -1,7 +1,8 @@
-# ifc2tiles 第1版 設計書
+# ifc-tiler 第1版 設計書
 
 作成日: 2026-09-26
 状態: 承認済み。第1版の実装はこの設計書に従う
+改訂: 2026-09-27 出力サイズの削減（インスタンス化・頂点色・法線のOCTAHEDRALフィルタ）と`--map-conversion`・IfcSiteの既定値の警告（§2、§3のA9〜A13、§4、§5.2、§8.1）。この改訂はレビュー待ち
 根拠の調査資料は作業用リポジトリの`.tmp/research/`にある（このリポジトリには含めない）
 根拠: 統合調査（`20260926_ifc3dtiles_00_report.md`）、実現性の判定（`20260926_ifc3dtiles_10_feasibility.md`）、ifc-liteの検証（`20260926_ifc3dtiles_11_ifclite_verification.md`）、ジオリファレンスの検証（`20260926_ifc3dtiles_12_georef_verification.md`）、CesiumJSの負荷（`20260926_ifc3dtiles_13_cesium_metadata_load.md`）、MVPの記録（`20260926_ifc3dtiles_20_mvp_record.md`）、レビューと実験（`20260926_ifc3dtiles_30_review_and_experiments.md`）
 
@@ -11,10 +12,10 @@
 
 利用者が観測できる完了状態:
 
-- `ifc2tiles model.ifc -o out/` の1コマンドで`out/tileset.json`と`out/tiles/*.glb`ができ、CesiumJSで地図上の正しい位置・向き・高さに表示される。
+- `ifc_tiler model.ifc -o out/` の1コマンドで`out/tileset.json`と`out/tiles/*.glb`ができ、CesiumJSで地図上の正しい位置・向き・高さに表示される。
 - 部材をクリックすると、GlobalId、IFCクラス、名前、型名、所属階、建物名、Pset / Qtoの値が取れる。多層壁のように部品で構成される部材も、親の部材として1つにまとまって選択できる。
 - 遠くから見ると大きな部材だけが描かれ、近づくと小さな部材が現れる。
-- 変換の経緯（使ったジオリファレンス、CRS、ジオイド、警告、除外した部材）が`out/ifc2tiles-report.json`と`tileset.json`に残る。
+- 変換の経緯（使ったジオリファレンス、CRS、ジオイド、警告、除外した部材）が`out/ifc-tiler-report.json`と`tileset.json`に残る。
 
 ## 2. スコープと非目標
 
@@ -26,7 +27,7 @@
 |---|---|
 | 3D Tiles 2.0 / glTF 2.1 | Draftのため |
 | 日本以外のCRS（PROJ連携） | 対象外。`--origin`によるENU配置で代替できる |
-| インスタンス化（`EXT_mesh_gpu_instancing`） | 実験で頂点削減が5%程度 |
+| 回転の違う同形メッシュのインスタンス化 | 平行移動だけの一致で実データの重複（頂点の54〜89%）の大半を拾える。第1版の「頂点削減5%程度」はIfcMappedItem由来だけを数えた誤り |
 | テクスチャ | 実験データでほぼ使われていない。色（材料の拡散色）だけを出す |
 | 遠景用の簡略形状（`REPLACE`） | 寸法によるADD階層で遠景の負荷は十分下がった |
 | 輪郭線・AEC描画拡張 | 第2版以降 |
@@ -47,11 +48,16 @@
 | A6 | CesiumJSで自作IFCとBURKWILを表示し、ピックで属性が取れ、コンソールにエラーがない | 内蔵ブラウザで確認 |
 | A7 | 既定設定のBURKWILの出力が10 MB以下、変換が5秒以下（Apple Silicon） | `scripts/batch-convert.sh`のレポート |
 | A8 | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`が通り、`Cargo.lock`の全crateが公開3日以上 | `scripts/check.sh` |
+| A9 | 既定の出力の合計（GLB＋tileset.json、`--origin`で配置）が、改訂前より荒池0404で40%以上、BURKWILで20%以上、BLCJ RC庁舎で10%以上、荒池0402で3%以上小さい。primitive数は改訂前以下 | 計測スクリプト |
+| A10 | CesiumJSで、改訂前後のBURKWILと荒池0404の全タイルの部材（GlobalId・クラス・名前）が一致し、同じ画面座標400点のピックが一致し、IFCクラスのスタイルが効き、コンソールにエラーがない | 内蔵ブラウザ |
+| A11 | `ifc2x3_plateau_origin`を`--map-conversion 0,0 --crs EPSG:6677`で変換すると既知点が1 cm以内。`--crs`がないと、また`--origin`・`--site-coords grid`と同時に指定すると終了コード2 | 結合テストと`scripts/acceptance-handmade.sh` |
+| A12 | IfcSiteの経緯度がRevitの既定値（2件）と一致すると警告が出る | 単体テスト |
+| A13 | インスタンス化の有無で、BURKWILの全部材の属性が同じで、形状の外接箱が3 mm以内で一致する | 結合テスト |
 
 ## 4. CLI
 
 ```text
-ifc2tiles <INPUT> -o <OUTPUT_DIR> [OPTIONS]
+ifc_tiler <INPUT> -o <OUTPUT_DIR> [OPTIONS]
 
   --crs <EPSG>               地図座標のCRS（例: EPSG:6677）。IfcMapConversionのTargetCRSを上書きする。
                              --site-coords grid のときは必須
@@ -59,6 +65,9 @@ ifc2tiles <INPUT> -o <OUTPUT_DIR> [OPTIONS]
                                enu:  IfcSiteの経緯度を原点とする東・北・上（TrueNorthで回転）
                                grid: 局所座標を地図座標のオフセットとみなす（PLATEAU BIM活用マニュアル第1版の方式）
   --origin <LAT,LON[,H]>     ファイルのジオリファレンスを無視し、この点を原点とするENUで置く（Hは正標高[m]）
+  --map-conversion <E,N[,H[,ROT]]>  ファイルのジオリファレンスを無視し、局所原点を地図座標(E, N)・正標高Hに置き、
+                             局所X軸を東からROT°（反時計回り）回す。倍率1。--crs が必須。
+                             --origin・--site-coords grid とは同時に指定できない
   --geoid <jpgeo2024|gsigeo2011|none>   正標高→楕円体高のジオイドモデル [既定: jpgeo2024]
                                jpgeo2024: JPGEO2024＋標高補正パラメータHrefconv2024（離島の標高基準面の差を含む）
   --scale-policy <auto|spec> IfcMapConversion.Scale の解釈 [既定: auto]
@@ -67,6 +76,7 @@ ifc2tiles <INPUT> -o <OUTPUT_DIR> [OPTIONS]
   --keep-parts               集約の部品を親部材にまとめない
   --no-psets                 Pset / Qto を列に含めない
   --no-compress              量子化とmeshopt圧縮をしない（溶接はする）
+  --no-instancing            同形メッシュをインスタンス化しない
 ```
 
 終了コード: 成功0、入力・設定の誤り2、変換できる部材がない3、その他1。エラーメッセージは標準エラーに1行で出し、原因と対処（どのオプションを使うか）を含める。
@@ -77,12 +87,12 @@ ifc2tiles <INPUT> -o <OUTPUT_DIR> [OPTIONS]
 out/
   tileset.json
   tiles/<storey番号>_<四分木パス>.glb      例: 002_r13.glb
-  ifc2tiles-report.json
+  ifc-tiler-report.json
 ```
 
 ### 5.1 tileset.json
 
-- `asset.version = "1.1"`、`asset.generator = "ifc2tiles <版>"`、`asset.extras.ifc2tiles`に変換情報（§8のレポートの`conversion`部分）。
+- `asset.version = "1.1"`、`asset.generator = "ifc-tiler <版>"`、`asset.extras.ifc_tiler`に変換情報（§8のレポートの`conversion`部分）。
 - `schema`: `storey`クラス（`name` STRING・semantic NAME、`globalId` STRING・semantic ID、`elevation` FLOAT64 [m]）と、全タイル共通の`element`クラスの完全な定義（§6）。
 - `groups`: 階ごとに1つ（所属階なしは`name = "(unassigned)"`）。標高の昇順。
 - 根タイル: `transform`＝根ENU→ECEF（列優先）、contentなし、`refine = "ADD"`、`geometricError`＝全体の外接箱の対角長。
@@ -94,11 +104,12 @@ out/
 | 項目 | 内容 |
 |---|---|
 | 座標 | 根ENU（x東・y北・z上）を glTF の Y-up へ `[x, z, −y]` |
-| primitive | 色（RGBA、各8bitに丸めた値）ごとに1つ。材料は`baseColorFactor`、`metallic 0`、`roughness 0.9`、`doubleSided`、α<0.99なら`BLEND` |
-| 属性 | `POSITION`、`NORMAL`、`_FEATURE_ID_0`（FLOAT、部材の番号） |
-| 既定の符号化 | 位置をタイル外接箱の最小点を基準に一様な刻み（最大辺÷65535）でUINT16に、法線をINT8正規化に量子化 → 同一の量子化頂点（位置・法線・部材番号）を溶接 → 頂点キャッシュ・頂点フェッチ最適化 → `EXT_meshopt_compression`（位置はstride 8、法線・部材番号はstride 4のATTRIBUTES、索引はTRIANGLES。フォールバック用の空バッファ付き）。復元はnodeの`matrix`。刻みを軸で変えないのは、非一様な倍率だと法線がゆがむため |
+| primitive | 直接置くメッシュは不透明・半透明の2つ（8bitに丸めたαが252以下なら半透明）。材料は`metallic 0`、`roughness 0.9`、`doubleSided`、係数は白、半透明は`BLEND`。色は頂点の`COLOR_0` |
+| 属性 | `POSITION`、`NORMAL`、`COLOR_0`（UNSIGNED_BYTE正規化VEC4）、`_FEATURE_ID_0`（FLOAT、部材の番号） |
+| インスタンス化 | タイル内で、色・索引・法線（0.01刻み）・最小点からの相対座標（1 mm刻み）が一致するメッシュが3個以上、かつ200頂点以上なら、テンプレート（材料の係数がその色、`COLOR_0`・部材番号なし）1つと、`EXT_mesh_gpu_instancing`のnode（`TRANSLATION`、圧縮時は量子化の刻みを`SCALE`、`_FEATURE_ID_0`）にする。部材番号は`EXT_instance_features`。ハッシュで候補を集め、量子化した値を比べて確かめる |
+| 既定の符号化 | 位置をタイル外接箱の最小点を基準に一様な刻み（最大辺÷65535）でUINT16に、法線をINT8正規化に量子化 → 同一の量子化頂点（位置・法線・部材番号）を溶接 → 頂点キャッシュ・頂点フェッチ最適化 → `EXT_meshopt_compression`（位置はstride 8、法線・色・部材番号はstride 4のATTRIBUTES、法線は`OCTAHEDRAL`フィルタ〔8ビット〕、索引はTRIANGLES。フォールバック用の空バッファ付き）。復元はnodeの`matrix`。刻みを軸で変えないのは、非一様な倍率だと法線がゆがむため |
 | `--no-compress` | FLOAT32の位置・法線、非圧縮（溶接と最適化はする） |
-| 拡張 | `EXT_mesh_features`（`featureIds[0] = {featureCount: タイルの部材数, attribute: 0, propertyTable: 0, label: "element"}`）、`EXT_structural_metadata`（§6）。圧縮時は`KHR_mesh_quantization`と`EXT_meshopt_compression`を`extensionsRequired`にも入れる |
+| 拡張 | `EXT_mesh_features`（`featureIds[0] = {featureCount: タイルの部材数, attribute: 0, propertyTable: 0, label: "element"}`）、`EXT_structural_metadata`（§6）。圧縮時は`KHR_mesh_quantization`と`EXT_meshopt_compression`を`extensionsRequired`にも入れる。インスタンス化したタイルは`EXT_mesh_gpu_instancing`（required）と`EXT_instance_features` |
 | バイナリ | bufferViewは8バイト境界。長さ0のbufferViewは作らない |
 
 ## 6. 部材メタデータ
@@ -132,7 +143,7 @@ tileset全体で1つの`element`クラス。IDは`^[a-zA-Z_][a-zA-Z0-9_]*$`。
 - 型: 全部材の値を見て決める。すべて真偽値→ENUM `IfcLogical`（UINT8。FALSE=0、TRUE=1、UNKNOWN=2、NOT_SET=255、noData `NOT_SET`）。すべて整数で、32ビットに収まり`i32::MIN`を含まない→INT32（noData `i32::MIN`）。収まらなければFLOAT64。INT64は使わない（CesiumJSはINT64の値を`BigInt`で返し、JSONの数値で書いたnoDataと一致しないため、値のない部材が`undefined`にならない。BLCJのサンプルで判明）。すべて数値→FLOAT64（noData −9999.0）。それ以外→STRING（noData `""`。空文字列を値なしとする）。固定列は`expressId`と`ifcClass`だけがrequiredで、ほかはSTRINGのnoData `""`。
 - 値の型: ifc-liteが文字列にした値を、値の型の名前で戻す。`IFCBOOLEAN`・`IFCLOGICAL`→真偽値、`IFCINTEGER`・`IFCCOUNTMEASURE`→整数、`LABEL`・`TEXT`・`IDENTIFIER`などの文字列型→文字列、それ以外で数値として読めるもの→数値。
 - 単位: 値の型（または数量の種類）が長さ・面積・体積・質量の測度なら、プロジェクト単位からSI（m、m²、m³、kg）へ換算する。換算した列の`description`に`unit: m`などを入れる。
-- 1タイルのproperty tableには、そのタイルに値が1つでもある列だけを書く。GLBのスキーマは、その列だけを持つ`element`クラス（スキーマIDはタイルごとに`ifc2tiles_<タイル名>`）。列のID・名前・型は全タイルで同じ。
+- 1タイルのproperty tableには、そのタイルに値が1つでもある列だけを書く。GLBのスキーマは、その列だけを持つ`element`クラス（スキーマIDはタイルごとに`ifc_tiler_<タイル名>`）。列のID・名前・型は全タイルで同じ。
 
 ### 6.4 利用者向けの約束事（READMEに書く）
 
@@ -153,10 +164,11 @@ tileset全体で1つの`element`クラス。IDは`^[a-zA-Z_][a-zA-Z0-9_]*$`。
 ### 8.1 解決の優先順位
 
 1. `--origin`があれば、それを原点とするENU（TrueNorthは使わない）。
+1'. `--map-conversion`があれば、その値で地図座標に置く（`--crs`が必須）。ファイルに`IfcMapConversion`・`IfcRigidOperation`があれば、使わなかったことを警告する。
 2. `IfcMapConversionScaled` / `IfcMapConversion`。CRSは`--crs`、なければTargetCRSの名前。
    ジオリファレンスのエンティティはifc-liteの抽出関数を使わず`source`で直接読む（抽出関数は`IfcRigidOperation`を扱わず、(0,0)の`IfcSite`も有効とみなし、`RefElevation`の単位を換算しないため）。
 3. `IfcRigidOperation`（自前で読む）: TargetCRSが`IfcProjectedCRS`なら、長さの平行移動として2と同じ経路（回転0、倍率はプロジェクト単位→地図単位）。`IfcGeographicCRS`なら、経緯度（角度単位は`AngleUnit`、なければプロジェクトの平面角の単位）と高さを原点とするENU。
-4. `IfcSite`の経緯度（(0,0)は未設定とみなす）。`RefElevation`はプロジェクト単位→m。`--site-coords`でENUか地図座標かを決める。
+4. `IfcSite`の経緯度（(0,0)は未設定とみなす）。`RefElevation`はプロジェクト単位→m。`--site-coords`でENUか地図座標かを決める。経緯度が既知の既定値（Revitの既定の場所、Revitの都市リストの東京。1e-6度以内）と一致すれば警告する。
 5. どれもなければ終了コード2で、`--origin`を案内する。
 
 ### 8.2 IfcMapConversionの数値

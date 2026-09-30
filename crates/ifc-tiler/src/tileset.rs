@@ -27,7 +27,7 @@ pub fn build(
         } }),
     );
     classes.insert("element".into(), table.full_class());
-    let mut schema = json!({ "id": "ifc2tiles", "classes": classes });
+    let mut schema = json!({ "id": "ifc_tiler", "classes": classes });
     if table.uses_logical() {
         schema["enums"] = json!({ LOGICAL_ENUM_ID: logical_enum() });
     }
@@ -48,7 +48,7 @@ pub fn build(
     let children: Vec<Value> = trees.iter().enumerate().map(|(s, t)| node(t, s, uri)).collect();
     let error = bounds.diagonal();
     json!({
-        "asset": { "version": "1.1", "generator": concat!("ifc2tiles ", env!("CARGO_PKG_VERSION")), "extras": { "ifc2tiles": extras } },
+        "asset": { "version": "1.1", "generator": concat!("ifc-tiler ", env!("CARGO_PKG_VERSION")), "extras": { "ifc_tiler": extras } },
         "schema": schema,
         "groups": groups,
         "geometricError": error,

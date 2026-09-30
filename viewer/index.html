@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>ifc2tiles viewer</title>
+  <title>ifc-tiler viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Cesium.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
@@ -25,13 +25,28 @@
     const tilesetUrl = params.get("tileset") ?? "/testdata/external/cesium-samples/FeatureIdAttributeAndPropertyTable/tileset.json";
     document.getElementById("src").textContent = tilesetUrl;
 
+    // 背景地図: 既定はなし。?basemap=gsi-std（地理院地図 標準）/ gsi-photo（全国最新写真）
+    const basemaps = {
+      "gsi-std": { url: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", maximumLevel: 18 },
+      "gsi-photo": { url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", maximumLevel: 18 },
+    };
+    const basemap = basemaps[params.get("basemap")];
     const viewer = new Cesium.Viewer("viewer", {
-      // 背景地図は付けない（外部タイルはCORSやネットワークに左右されるため）
-      baseLayer: false,
+      baseLayer: basemap
+        ? new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({
+            ...basemap, credit: new Cesium.Credit('<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a>'),
+          }))
+        : false,
       baseLayerPicker: false, geocoder: false, timeline: false, animation: false,
       terrainProvider: new Cesium.EllipsoidTerrainProvider(),
     });
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#3a4a3a");
+    // 地形: 既定は起伏なし（楕円体）。?terrain=plateau で PLATEAU-Terrain（楕円体高。トークン不要）
+    if (params.get("terrain") === "plateau") {
+      Cesium.CesiumTerrainProvider.fromUrl("https://tile.plateauview.mlit.go.jp/terrain", { requestVertexNormals: true })
+        .then((t) => { viewer.terrainProvider = t; })
+        .catch((e) => console.error("PLATEAU-Terrain", e));
+    }
     viewer.scene.globe.depthTestAgainstTerrain = true;
     window.viewer = viewer;
 

@@ -2,7 +2,7 @@
 //!
 //! IFCから読んだ生の値（`RawGeoref`）と利用者の指定（`GeorefOptions`）から、
 //! 局所座標（IFCの世界座標、m）を地球上に置く方法（`Placement`）を1つ決める。
-//! 優先順位は `--origin` → `IfcMapConversion` → `IfcRigidOperation` → `IfcSite`の経緯度。
+//! 優先順位は `--origin` → `--map-conversion` → `IfcMapConversion` → `IfcRigidOperation` → `IfcSite`の経緯度。
 
 use jprect::JPRZone;
 
@@ -83,6 +83,8 @@ pub struct GeorefOptions {
     /// 緯度・経度 [度]・正標高 [m]。
     pub origin: Option<[f64; 3]>,
     pub scale_policy: ScalePolicy,
+    /// 局所原点の地図座標（東, 北, 正標高 [m]）と、局所X軸から東への回転（反時計回り）[度]。`--crs`が必要。
+    pub map_conversion: Option<[f64; 4]>,
 }
 
 /// 局所座標（m）を地球上に置く方法。
@@ -153,6 +155,8 @@ pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Re
     let (placement, source) = if let Some([lat, lon, h]) = opts.origin {
         let p = EnuPlacement { latitude_deg: lat, longitude_deg: lon, orthometric_height: h, rotation: 0.0 };
         (Placement::Enu(p), "--origin")
+    } else if let Some(given) = opts.map_conversion {
+        (given_map_conversion(raw, given, opts, &mut warnings)?, "--map-conversion")
     } else if let Some(mc) = &raw.map_conversion {
         (map_conversion(raw, mc, opts, &mut warnings)?, "IfcMapConversion")
     } else if let Some(ro) = &raw.rigid_operation {
@@ -167,7 +171,8 @@ pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Re
     };
     if matches!(placement, Placement::Enu(_)) && opts.origin.is_none() && reach_m > FAR_FROM_ORIGIN_M {
         warnings.push(format!(
-            "形状が局所原点から最大{reach_m:.0} m離れている。局所座標が平面直角座標の値なら、\
+            "形状が局所原点から最大{reach_m:.0} m離れている。局所座標が平面直角座標の値なら \
+             --map-conversion 0,0 --crs EPSG:xxxx、IfcSiteの経緯度を投影した点からのオフセットなら \
              --site-coords grid --crs EPSG:xxxx を指定する"
         ));
     }
@@ -199,6 +204,28 @@ fn map_conversion(
         rotation: ordinate.atan2(abscissa),
         scale,
         factors: mc.factors,
+    }))
+}
+
+/// `--map-conversion`で与えた地図座標の基準。局所座標（m）をそのまま使い、倍率は1とする。
+fn given_map_conversion(
+    raw: &RawGeoref,
+    [e, n, h, rotation_deg]: [f64; 4],
+    opts: &GeorefOptions,
+    warnings: &mut Vec<String>,
+) -> Result<Placement, String> {
+    let epsg = opts.crs_epsg.ok_or("--map-conversion には --crs EPSG:xxxx が必要")?;
+    let (zone, epsg) = zone_for(Some(epsg), None, warnings)?;
+    if raw.map_conversion.is_some() || raw.rigid_operation.is_some() {
+        warnings.push("ファイルのIfcMapConversion・IfcRigidOperationは使わず、--map-conversionで置いた".into());
+    }
+    Ok(Placement::Grid(GridPlacement {
+        zone,
+        epsg,
+        origin: [e, n, h],
+        rotation: rotation_deg.to_radians(),
+        scale: 1.0,
+        factors: [1.0; 3],
     }))
 }
 
@@ -269,6 +296,12 @@ fn site_lat_lon(site: Option<&SiteReference>, warnings: &mut Vec<String>) -> Opt
         warnings.push("IfcSiteの経緯度が(0, 0)のため、未設定とみなした".into());
         return None;
     }
+    if let Some(what) = known_default(lat, lon) {
+        warnings.push(format!(
+            "IfcSiteの経緯度（{lat:.6}, {lon:.6}）は{what}と一致し、実際の位置ではない可能性が高い。\
+             --origin LAT,LON[,H] か --map-conversion E,N --crs EPSG:xxxx で置き直す"
+        ));
+    }
     Some((lat, lon))
 }
 
@@ -298,6 +331,19 @@ fn site(raw: &RawGeoref, lat: f64, lon: f64, elevation: f64, opts: &GeorefOption
             }))
         }
     }
+}
+
+/// オーサリングツールの既定値とみられるIfcSiteの経緯度 [度]。無関係な複数のファイルで同じ値を確認したもの
+/// （度分秒と百万分の1秒で書かれた値を度に直した）。
+const KNOWN_DEFAULTS: [(f64, f64, &str); 2] = [
+    // (42,24,53,508911), (-71,-15,-29,-58837)
+    (42.414_863_586_4, -71.258_071_899_2, "Revitの既定の場所（米国マサチューセッツ州）"),
+    // (35,41,6,4943), (139,45,3,625488)
+    (35.685_001_373_1, 139.751_007_080_0, "Revitの都市リストの東京"),
+];
+
+fn known_default(lat: f64, lon: f64) -> Option<&'static str> {
+    KNOWN_DEFAULTS.iter().find(|(a, b, _)| (lat - a).abs() < 1e-6 && (lon - b).abs() < 1e-6).map(|&(_, _, w)| w)
 }
 
 /// CRS名（`EPSG:6677`など）から平面直角座標系の系を決める。`--crs`があればそれを優先する。
@@ -344,7 +390,13 @@ mod tests {
     }
 
     fn opts() -> GeorefOptions {
-        GeorefOptions { crs_epsg: None, site_coords: SiteCoords::Enu, origin: None, scale_policy: ScalePolicy::Auto }
+        GeorefOptions {
+            crs_epsg: None,
+            site_coords: SiteCoords::Enu,
+            origin: None,
+            scale_policy: ScalePolicy::Auto,
+            map_conversion: None,
+        }
     }
 
     fn mc(scale: f64, map_unit_m: Option<f64>) -> MapConversion {
@@ -525,5 +577,34 @@ mod tests {
         let r = resolve(&raw, &o, 1e6).unwrap();
         assert_eq!(r.source, "--origin");
         assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn given_map_conversion_needs_crs_and_wins_over_the_file() {
+        let raw = RawGeoref { map_conversion: Some(mc(0.001, Some(1.0))), ..raw_mm() };
+        let no_crs = GeorefOptions { map_conversion: Some([0.0, 0.0, 0.0, 0.0]), ..opts() };
+        assert!(resolve(&raw, &no_crs, 0.0).unwrap_err().contains("--crs"));
+        let o = GeorefOptions { crs_epsg: Some(6677), map_conversion: Some([100.0, 200.0, 3.0, 90.0]), ..opts() };
+        let r = resolve(&raw, &o, 0.0).unwrap();
+        assert_eq!(r.source, "--map-conversion");
+        assert_eq!(r.warnings.len(), 1);
+        let g = grid(&r);
+        assert_eq!((g.epsg, g.scale), (6677, 1.0));
+        // 局所X軸を東から90°回すと、局所の(1, 0)は北へ1 m
+        let p = g.to_map([1.0, 0.0, 2.0]);
+        assert!((p[0] - 100.0).abs() < 1e-9 && (p[1] - 201.0).abs() < 1e-9 && (p[2] - 5.0).abs() < 1e-9, "{p:?}");
+    }
+
+    #[test]
+    fn known_default_site_locations_are_warned() {
+        let site = |lat, lon| RawGeoref {
+            site: Some(SiteReference { latitude_deg: Some(lat), longitude_deg: Some(lon), elevation: None }),
+            ..raw_mm()
+        };
+        let boston = resolve(&site(42.414_863_586_4, -71.258_071_899_2), &opts(), 0.0).unwrap();
+        assert!(boston.warnings.iter().any(|w| w.contains("Revitの既定の場所")), "{:?}", boston.warnings);
+        let tokyo = resolve(&site(35.685_001_4, 139.751_007_1), &opts(), 0.0).unwrap();
+        assert!(tokyo.warnings.iter().any(|w| w.contains("東京")), "{:?}", tokyo.warnings);
+        assert!(resolve(&site(35.681_236, 139.767_125), &opts(), 0.0).unwrap().warnings.is_empty());
     }
 }

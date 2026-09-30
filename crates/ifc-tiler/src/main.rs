@@ -1,12 +1,12 @@
-//! `ifc2tiles <INPUT> -o <OUTPUT_DIR> [OPTIONS]`
+//! `ifc_tiler <INPUT> -o <OUTPUT_DIR> [OPTIONS]`
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use ifc2tiles::geodesy::GeoidModel;
-use ifc2tiles::georef::{GeorefOptions, ScalePolicy, SiteCoords, parse_epsg};
-use ifc2tiles::{Error, Options, convert};
+use ifc_tiler::geodesy::GeoidModel;
+use ifc_tiler::georef::{GeorefOptions, ScalePolicy, SiteCoords, parse_epsg};
+use ifc_tiler::{Error, Options, convert};
 
 /// IFCを部材情報付きの3D Tiles 1.1へ変換する
 #[derive(Parser)]
@@ -14,7 +14,7 @@ use ifc2tiles::{Error, Options, convert};
 struct Cli {
     /// 入力IFC（IFC2x3 / IFC4 / IFC4X3）
     input: PathBuf,
-    /// 出力先のディレクトリ（tileset.json、tiles/、ifc2tiles-report.json）
+    /// 出力先のディレクトリ（tileset.json、tiles/、ifc-tiler-report.json）
     #[arg(short, long)]
     output: PathBuf,
     /// 地図座標のCRS（例: EPSG:6677）。IfcMapConversionのTargetCRSを上書きする。--site-coords grid では必須
@@ -26,6 +26,10 @@ struct Cli {
     /// ファイルのジオリファレンスを使わず、この点を原点とする東・北・上で置く（緯度,経度[,正標高m]）
     #[arg(long, value_parser = origin, allow_hyphen_values = true)]
     origin: Option<[f64; 3]>,
+    /// 局所座標を地図座標で置く（東,北[,正標高[,局所X軸から東への回転°]]、m）。--crsが必要。
+    /// ファイルのジオリファレンスの代わりに使う。局所座標が平面直角座標の値なら 0,0
+    #[arg(long, value_parser = map_conversion, allow_hyphen_values = true, conflicts_with = "origin")]
+    map_conversion: Option<[f64; 4]>,
     /// 正標高→楕円体高のジオイドモデル（jpgeo2024はHrefconv2024を含む）
     #[arg(long, value_enum, default_value_t = GeoidArg::Jpgeo2024)]
     geoid: GeoidArg,
@@ -47,6 +51,9 @@ struct Cli {
     /// 量子化とmeshopt圧縮をしない
     #[arg(long)]
     no_compress: bool,
+    /// タイル内の同形メッシュをインスタンス化しない
+    #[arg(long)]
+    no_instancing: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -82,8 +89,23 @@ fn origin(s: &str) -> Result<[f64; 3], String> {
     }
 }
 
+fn map_conversion(s: &str) -> Result<[f64; 4], String> {
+    let v: Vec<f64> =
+        s.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("{s}: {e}"))?;
+    match v.as_slice() {
+        [e, n] => Ok([*e, *n, 0.0, 0.0]),
+        [e, n, h] => Ok([*e, *n, *h, 0.0]),
+        [e, n, h, r] => Ok([*e, *n, *h, *r]),
+        _ => Err(format!("東,北[,正標高[,回転°]] の形で指定する: {s}")),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.map_conversion.is_some() && matches!(cli.site_coords, SiteCoordsArg::Grid) {
+        eprintln!("error: --map-conversion と --site-coords grid は同時に指定できない");
+        return ExitCode::from(2);
+    }
     let opts = Options {
         georef: GeorefOptions {
             crs_epsg: cli.crs,
@@ -92,6 +114,7 @@ fn main() -> ExitCode {
                 SiteCoordsArg::Grid => SiteCoords::Grid,
             },
             origin: cli.origin,
+            map_conversion: cli.map_conversion,
             scale_policy: match cli.scale_policy {
                 ScalePolicyArg::Auto => ScalePolicy::Auto,
                 ScalePolicyArg::Spec => ScalePolicy::Spec,
@@ -107,6 +130,7 @@ fn main() -> ExitCode {
         keep_parts: cli.keep_parts,
         include_properties: !cli.no_psets,
         compress: !cli.no_compress,
+        instancing: !cli.no_instancing,
     };
     match convert(&cli.input, &cli.output, &opts) {
         Ok(r) => {

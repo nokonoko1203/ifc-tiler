@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ifc2tiles"]
+members = ["crates/ifc-tiler"]
 
 [workspace.package]
 edition = "2024"

@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ifc2tiles::Options;
-use ifc2tiles::geodesy::GeoidModel;
-use ifc2tiles::georef::{GeorefOptions, ScalePolicy, SiteCoords};
+use ifc_tiler::Options;
+use ifc_tiler::geodesy::GeoidModel;
+use ifc_tiler::georef::{GeorefOptions, ScalePolicy, SiteCoords};
 use serde_json::Value;
 
 pub fn root() -> PathBuf {
@@ -19,6 +19,7 @@ pub fn options() -> Options {
             site_coords: SiteCoords::Enu,
             origin: None,
             scale_policy: ScalePolicy::Auto,
+            map_conversion: None,
         },
         geoid: GeoidModel::Jpgeo2024,
         max_features: 200,
@@ -26,6 +27,7 @@ pub fn options() -> Options {
         keep_parts: false,
         include_properties: true,
         compress: true,
+        instancing: true,
     }
 }
 
@@ -63,6 +65,11 @@ fn collect(tile: &Value, uris: &mut Vec<String>) {
     }
 }
 
+unsafe extern "C" {
+    // meshopt crateが公開していない、同梱のmeshoptimizerのフィルタ復号
+    fn meshopt_decodeFilterOct(buffer: *mut std::ffi::c_void, count: usize, stride: usize);
+}
+
 fn u(v: &Value) -> usize {
     v.as_u64().unwrap() as usize
 }
@@ -79,7 +86,14 @@ fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
                 .iter()
                 .flat_map(|x| x.iter().flat_map(|c| c.to_le_bytes()))
                 .collect(),
-            ("ATTRIBUTES", 4) => meshopt::decode_vertex_buffer::<[u8; 4]>(data, count).unwrap().concat(),
+            ("ATTRIBUTES", 4) => {
+                let mut out = meshopt::decode_vertex_buffer::<[u8; 4]>(data, count).unwrap();
+                if m["filter"] == "OCTAHEDRAL" {
+                    // SAFETY: outは count×4 バイト
+                    unsafe { meshopt_decodeFilterOct(out.as_mut_ptr().cast(), count, 4) };
+                }
+                out.concat()
+            }
             ("TRIANGLES", 2) => {
                 meshopt::decode_index_buffer::<u16>(data, count).unwrap().iter().flat_map(|x| x.to_le_bytes()).collect()
             }
@@ -126,30 +140,67 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
             f.props.insert(id.clone(), v);
         }
     }
-    let node: Vec<f64> = js["nodes"][0]["matrix"]
-        .as_array()
-        .map(|a| a.iter().map(|v| v.as_f64().unwrap()).collect())
-        .unwrap_or_else(|| vec![1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
-    for prim in js["meshes"][0]["primitives"].as_array().unwrap() {
-        let pa = &js["accessors"][u(&prim["attributes"]["POSITION"])];
-        let fa = &js["accessors"][u(&prim["attributes"]["_FEATURE_ID_0"])];
-        let pos = view(&js, bin, u(&pa["bufferView"]));
-        let fid = view(&js, bin, u(&fa["bufferView"]));
-        let stride = js["bufferViews"][u(&pa["bufferView"])]["byteStride"].as_u64().unwrap() as usize;
-        for k in 0..u(&pa["count"]) {
-            let q: [f64; 3] = std::array::from_fn(|c| match pa["componentType"].as_u64().unwrap() {
-                5123 => {
-                    f64::from(u16::from_le_bytes(pos[k * stride + 2 * c..k * stride + 2 * c + 2].try_into().unwrap()))
+    // 全nodeを見る。インスタンス化したnodeは、インスタンスごとに 平行移動＋倍率 を掛け、部材番号はインスタンスの属性
+    for node in js["nodes"].as_array().unwrap() {
+        let matrix: Vec<f64> = node["matrix"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_f64().unwrap()).collect())
+            .unwrap_or_else(|| vec![1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        let floats = |a: &Value| -> Vec<f64> {
+            view(&js, bin, u(&js["accessors"][u(a)]["bufferView"]))
+                .chunks_exact(4)
+                .map(|c| f64::from(f32::from_le_bytes(c.try_into().unwrap())))
+                .collect()
+        };
+        let inst = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+        // (平行移動, 倍率, 部材番号)。インスタンス化していなければ1つで、部材番号は頂点の属性
+        let placements: Vec<([f64; 3], [f64; 3], Option<usize>)> = if inst.is_object() {
+            let t = floats(&inst["TRANSLATION"]);
+            let s = if inst.get("SCALE").is_some() { floats(&inst["SCALE"]) } else { vec![1.0; t.len()] };
+            let f = floats(&inst["_FEATURE_ID_0"]);
+            (0..f.len())
+                .map(|i| {
+                    (
+                        [t[3 * i], t[3 * i + 1], t[3 * i + 2]],
+                        [s[3 * i], s[3 * i + 1], s[3 * i + 2]],
+                        Some(f[i] as usize),
+                    )
+                })
+                .collect()
+        } else {
+            vec![([0.0; 3], [1.0; 3], None)]
+        };
+        for prim in js["meshes"][u(&node["mesh"])]["primitives"].as_array().unwrap() {
+            let pa = &js["accessors"][u(&prim["attributes"]["POSITION"])];
+            let pos = view(&js, bin, u(&pa["bufferView"]));
+            let fid = prim["attributes"]
+                .get("_FEATURE_ID_0")
+                .map(|a| view(&js, bin, u(&js["accessors"][u(a)]["bufferView"])));
+            let stride = js["bufferViews"][u(&pa["bufferView"])]["byteStride"].as_u64().unwrap() as usize;
+            for k in 0..u(&pa["count"]) {
+                let q: [f64; 3] = std::array::from_fn(|c| match pa["componentType"].as_u64().unwrap() {
+                    5123 => f64::from(u16::from_le_bytes(
+                        pos[k * stride + 2 * c..k * stride + 2 * c + 2].try_into().unwrap(),
+                    )),
+                    _ => f64::from(f32::from_le_bytes(
+                        pos[k * stride + 4 * c..k * stride + 4 * c + 4].try_into().unwrap(),
+                    )),
+                });
+                let g: [f64; 3] = std::array::from_fn(|r| {
+                    matrix[r] * q[0] + matrix[4 + r] * q[1] + matrix[8 + r] * q[2] + matrix[12 + r]
+                });
+                for (t, s, f) in &placements {
+                    let p: [f64; 3] = std::array::from_fn(|c| t[c] + s[c] * g[c]);
+                    let enu = [p[0], -p[2], p[1]]; // glTFのY上 → ENU
+                    let e: [f64; 3] =
+                        std::array::from_fn(|r| m[r] * enu[0] + m[4 + r] * enu[1] + m[8 + r] * enu[2] + m[12 + r]);
+                    let f = f.unwrap_or_else(|| {
+                        let b = fid.as_ref().expect("インスタンス化していないprimitiveは部材番号を持つ");
+                        f32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap()) as usize
+                    });
+                    features[f].ecef.push(e);
                 }
-                _ => f64::from(f32::from_le_bytes(pos[k * stride + 4 * c..k * stride + 4 * c + 4].try_into().unwrap())),
-            });
-            let g: [f64; 3] =
-                std::array::from_fn(|r| node[r] * q[0] + node[4 + r] * q[1] + node[8 + r] * q[2] + node[12 + r]);
-            let enu = [g[0], -g[2], g[1]]; // glTFのY上 → ENU
-            let e: [f64; 3] =
-                std::array::from_fn(|r| m[r] * enu[0] + m[4 + r] * enu[1] + m[8 + r] * enu[2] + m[12 + r]);
-            let f = f32::from_le_bytes(fid[4 * k..4 * k + 4].try_into().unwrap()) as usize;
-            features[f].ecef.push(e);
+            }
         }
     }
     features
