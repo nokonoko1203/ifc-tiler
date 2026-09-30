@@ -3,32 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ifc_tiler::Options;
-use ifc_tiler::geodesy::GeoidModel;
-use ifc_tiler::georef::{GeorefOptions, ScalePolicy, SiteCoords};
 use serde_json::Value;
 
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-pub fn options() -> Options {
-    Options {
-        georef: GeorefOptions {
-            crs_epsg: None,
-            site_coords: SiteCoords::Enu,
-            origin: None,
-            scale_policy: ScalePolicy::Auto,
-            map_conversion: None,
-        },
-        geoid: GeoidModel::Jpgeo2024,
-        max_features: 200,
-        include_spaces: false,
-        keep_parts: false,
-        include_properties: true,
-        compress: true,
-        instancing: true,
-    }
 }
 
 pub fn out_dir(name: &str) -> PathBuf {
@@ -156,7 +134,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
         // (平行移動, 倍率, 部材番号)。インスタンス化していなければ1つで、部材番号は頂点の属性
         let placements: Vec<([f64; 3], [f64; 3], Option<usize>)> = if inst.is_object() {
             let t = floats(&inst["TRANSLATION"]);
-            let s = if inst.get("SCALE").is_some() { floats(&inst["SCALE"]) } else { vec![1.0; t.len()] };
+            let s = floats(&inst["SCALE"]);
             let f = floats(&inst["_FEATURE_ID_0"]);
             (0..f.len())
                 .map(|i| {
@@ -178,13 +156,10 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 .map(|a| view(&js, bin, u(&js["accessors"][u(a)]["bufferView"])));
             let stride = js["bufferViews"][u(&pa["bufferView"])]["byteStride"].as_u64().unwrap() as usize;
             for k in 0..u(&pa["count"]) {
-                let q: [f64; 3] = std::array::from_fn(|c| match pa["componentType"].as_u64().unwrap() {
-                    5123 => f64::from(u16::from_le_bytes(
-                        pos[k * stride + 2 * c..k * stride + 2 * c + 2].try_into().unwrap(),
-                    )),
-                    _ => f64::from(f32::from_le_bytes(
-                        pos[k * stride + 4 * c..k * stride + 4 * c + 4].try_into().unwrap(),
-                    )),
+                // 位置はUINT16に量子化してある（KHR_mesh_quantization）
+                let q: [f64; 3] = std::array::from_fn(|c| {
+                    let o = k * stride + 2 * c;
+                    f64::from(u16::from_le_bytes(pos[o..o + 2].try_into().unwrap()))
                 });
                 let g: [f64; 3] = std::array::from_fn(|r| {
                     matrix[r] * q[0] + matrix[4 + r] * q[1] + matrix[8 + r] * q[2] + matrix[12 + r]

@@ -15,7 +15,6 @@ pub fn build(
     uri: &dyn Fn(usize, &Node) -> Option<String>,
     storeys: &[Storey],
     table: &Table,
-    extras: Value,
 ) -> Value {
     let mut classes = Map::new();
     classes.insert(
@@ -48,7 +47,7 @@ pub fn build(
     let children: Vec<Value> = trees.iter().enumerate().map(|(s, t)| node(t, s, uri)).collect();
     let error = bounds.diagonal();
     json!({
-        "asset": { "version": "1.1", "generator": concat!("ifc-tiler ", env!("CARGO_PKG_VERSION")), "extras": { "ifc_tiler": extras } },
+        "asset": { "version": "1.1", "generator": concat!("ifc-tiler ", env!("CARGO_PKG_VERSION")) },
         "schema": schema,
         "groups": groups,
         "geometricError": error,
@@ -106,18 +105,9 @@ mod tests {
         let table = Table::build(
             &[ElementRecord { express_id: 1, ifc_class: "IfcWall".into(), ..Default::default() }],
             &UnitScales::default(),
-            true,
         );
         let storeys = [Storey { name: "1階".into(), global_id: None, elevation_m: Some(0.0) }];
-        let ts = build(
-            &Frame::at_geodetic(35.0, 139.0, 0.0),
-            &root.bounds.clone(),
-            &[root],
-            &uri,
-            &storeys,
-            &table,
-            json!({}),
-        );
+        let ts = build(&Frame::at_geodetic(35.0, 139.0, 0.0), &root.bounds.clone(), &[root], &uri, &storeys, &table);
         assert_eq!(ts["asset"]["version"], "1.1");
         assert_eq!(ts["root"]["refine"], "ADD");
         let c = &ts["root"]["children"][0];

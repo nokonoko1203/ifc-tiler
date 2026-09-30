@@ -8,7 +8,6 @@ pub mod geodesy;
 pub mod georef;
 pub mod glb;
 pub mod metadata;
-pub mod report;
 pub mod semantics;
 pub mod source;
 pub mod tileset;
@@ -19,30 +18,27 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use std::time::Instant;
 
-use serde_json::{Value, json};
-
-use crate::geodesy::{Frame, GeoidModel, Projector, rotate};
+use crate::geodesy::{Frame, GEOID_NAME, Projector, rotate};
 use crate::georef::{GeorefOptions, Placement, Resolved};
-use crate::glb::{Encoding, TileMesh, TileMetadata};
+use crate::glb::{TileMesh, TileMetadata};
 use crate::metadata::Table;
-use crate::report::{Report, TileReport};
-use crate::semantics::{Semantics, SemanticsOptions};
+use crate::semantics::Semantics;
 use crate::source::SourceModel;
 use crate::tiling::{Aabb, Node};
 
+/// 1タイルの部材数の上限。
+const MAX_FEATURES: usize = 200;
+
+/// 変換の結果。
 #[derive(Clone, Debug, PartialEq)]
-pub struct Options {
-    pub georef: GeorefOptions,
-    pub geoid: GeoidModel,
-    pub max_features: usize,
-    pub include_spaces: bool,
-    pub keep_parts: bool,
-    pub include_properties: bool,
-    pub compress: bool,
-    /// タイル内の同形メッシュをインスタンス化する。
-    pub instancing: bool,
+pub struct Summary {
+    pub elements: usize,
+    pub storeys: usize,
+    pub tiles: usize,
+    /// GLBの合計サイズ [byte]。
+    pub bytes: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -75,15 +71,12 @@ fn outside([e, n, _]: [f64; 3]) -> Error {
     ))
 }
 
-/// `input`のIFCを変換し、`output`にtileset.json・tiles/*.glb・ifc-tiler-report.jsonを書く。
-pub fn convert(input: &Path, output: &Path, opts: &Options) -> Result<Report, Error> {
-    let t0 = Instant::now();
+/// `input`のIFCを変換し、`output`にtileset.jsonとtiles/*.glbを書く。
+pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summary, Error> {
     let bytes = fs::read(input).map_err(|e| Error::Input(format!("{}: {e}", input.display())))?;
     let model = source::read(&bytes);
-    let t_read = t0.elapsed().as_millis();
 
-    let sem =
-        semantics::build(&model, SemanticsOptions { include_spaces: opts.include_spaces, keep_parts: opts.keep_parts });
+    let sem = semantics::build(&model);
     if sem.elements.is_empty() {
         return Err(Error::NoElements(format!("{}: 形状を持つ部材がない", input.display())));
     }
@@ -93,52 +86,34 @@ pub fn convert(input: &Path, output: &Path, opts: &Options) -> Result<Report, Er
         .flat_map(|e| e.meshes.iter().flat_map(|&i| &model.meshes[i].positions))
         .map(|p| p[0].hypot(p[1]))
         .fold(0.0, f64::max);
-    let resolved = georef::resolve(&model.georef, &opts.georef, reach).map_err(Error::Input)?;
-    let placed = place(&model, &sem, &resolved, opts.geoid)?;
+    let resolved = georef::resolve(&model.georef, opts, reach).map_err(Error::Input)?;
+    let placed = place(&model, &sem, &resolved)?;
 
     let records: Vec<_> = sem.elements.iter().map(|e| e.record.clone()).collect();
-    let table = Table::build(&records, &model.units, opts.include_properties);
+    let table = Table::build(&records, &model.units);
     let trees: Vec<Node> = (0..sem.storeys.len())
         .map(|s| {
             let items: Vec<(usize, Aabb)> = (0..sem.elements.len())
                 .filter(|&i| sem.elements[i].storey == s)
                 .map(|i| (i, placed.element_bounds[i]))
                 .collect();
-            tiling::build(&items, opts.max_features)
+            tiling::build(&items, MAX_FEATURES)
         })
         .collect();
-    let t_convert = t0.elapsed().as_millis();
 
-    let enc = Encoding { compress: opts.compress, instancing: opts.instancing };
-    let (uris, tiles) = write_tiles(output, &trees, &model, &sem, &placed, &table, enc)?;
-    let conversion = conversion_json(&resolved, opts, &placed.frame, &placed.warnings);
+    let (uris, bytes) = write_tiles(output, &trees, &model, &sem, &placed, &table)?;
     let bounds = placed.element_bounds.iter().fold(Aabb::EMPTY, |a, b| a.union(b));
     let uri = |s: usize, n: &Node| uris.get(&(s, n.path.clone())).cloned();
-    let ts = tileset::build(&placed.frame, &bounds, &trees, &uri, &sem.storeys, &table, conversion.clone());
+    let ts = tileset::build(&placed.frame, &bounds, &trees, &uri, &sem.storeys, &table);
     let ts_path = output.join("tileset.json");
     fs::write(&ts_path, serde_json::to_vec_pretty(&ts).expect("tilesetのJSON化")).map_err(io(&ts_path))?;
-
-    let mut report = Report {
-        input: input.display().to_string(),
-        schema: model.schema.clone(),
+    Ok(Summary {
         elements: sem.elements.len(),
         storeys: sem.storeys.len(),
-        columns: table.columns.len(),
-        excluded: sem.excluded.clone(),
-        without_mesh: sem.without_mesh.clone(),
-        tiles,
-        conversion,
+        tiles: uris.len(),
+        bytes,
         warnings: placed.warnings,
-        timing_ms: Default::default(),
-    };
-    report.timing_ms.insert("read", t_read);
-    report.timing_ms.insert("convert", t_convert - t_read);
-    report.timing_ms.insert("write", t0.elapsed().as_millis() - t_convert);
-    report.timing_ms.insert("total", t0.elapsed().as_millis());
-    let report_path = output.join("ifc-tiler-report.json");
-    fs::write(&report_path, serde_json::to_vec_pretty(&report.to_json()).expect("レポートのJSON化"))
-        .map_err(io(&report_path))?;
-    Ok(report)
+    })
 }
 
 /// 地球上に置いた形状。頂点と法線は根のENU（`frame`）の座標で、`SourceModel::meshes`と同じ番号。
@@ -153,9 +128,9 @@ struct Placed {
 }
 
 /// 局所座標→ECEF→根のENU。根のENUの原点は、全頂点のECEF外接箱の中心。
-fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved, geoid: GeoidModel) -> Result<Placed, Error> {
+fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Placed, Error> {
     let mut warnings = resolved.warnings.clone();
-    let projector = Projector::new(resolved.placement, geoid);
+    let projector = Projector::new(resolved.placement);
     let mut positions: Vec<Vec<[f64; 3]>> = vec![Vec::new(); model.meshes.len()];
     let mut ecef_bounds = Aabb::EMPTY;
     for &i in sem.elements.iter().flat_map(|e| &e.meshes) {
@@ -172,7 +147,7 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved, geoid: Geoid
             Placement::Enu(_) => "原点".to_string(),
             Placement::Grid(_) => format!("{}頂点", projector.geoid_misses()),
         };
-        warnings.push(format!("{what}がジオイドモデル（{}）の範囲外で、ジオイド高を0とした", geoid.name()));
+        warnings.push(format!("{what}がジオイドモデル（{}）の範囲外で、ジオイド高を0とした", GEOID_NAME));
     }
 
     let frame = Frame::at_ecef(ecef_bounds.center());
@@ -202,7 +177,7 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved, geoid: Geoid
 /// (階の番号, 四分木のパス) → contentのURI。
 type TileUris = HashMap<(usize, String), String>;
 
-/// contentを持つノードごとにGLBを書く。返り値は（(階, パス)→URI、タイルごとの報告）。
+/// contentを持つノードごとにGLBを書く。返り値は（(階, パス)→URI、GLBの合計サイズ）。
 fn write_tiles(
     output: &Path,
     trees: &[Node],
@@ -210,12 +185,11 @@ fn write_tiles(
     sem: &Semantics,
     placed: &Placed,
     table: &Table,
-    enc: Encoding,
-) -> Result<(TileUris, Vec<TileReport>), Error> {
+) -> Result<(TileUris, usize), Error> {
     let tiles_dir = output.join("tiles");
     fs::create_dir_all(&tiles_dir).map_err(io(&tiles_dir))?;
     let mut uris = HashMap::new();
-    let mut reports = Vec::new();
+    let mut total = 0;
     for (s, tree) in trees.iter().enumerate() {
         let mut stack = vec![tree];
         while let Some(n) = stack.pop() {
@@ -239,45 +213,13 @@ fn write_tiles(
                 })
                 .collect();
             let schema_id = format!("ifc_tiler_{name}");
-            let (bytes, stats) =
-                glb::write(&meshes, &TileMetadata { table, rows: &n.elements, schema_id: &schema_id }, enc);
+            let bytes = glb::write(&meshes, &TileMetadata { table, rows: &n.elements, schema_id: &schema_id });
             let uri = format!("tiles/{name}.glb");
             let path = output.join(&uri);
             fs::write(&path, &bytes).map_err(io(&path))?;
-            reports.push(TileReport {
-                uri: uri.clone(),
-                features: n.elements.len(),
-                bytes: bytes.len(),
-                primitives: stats.primitives,
-                instances: stats.instances,
-            });
+            total += bytes.len();
             uris.insert((s, n.path.clone()), uri);
         }
     }
-    reports.sort_by(|a, b| a.uri.cmp(&b.uri));
-    Ok((uris, reports))
-}
-
-fn conversion_json(resolved: &Resolved, opts: &Options, frame: &Frame, warnings: &[String]) -> Value {
-    let placement = match resolved.placement {
-        Placement::Grid(g) => json!({
-            "kind": "grid", "crs": format!("EPSG:{}", g.epsg), "originMap": g.origin,
-            "rotationDeg": g.rotation.to_degrees(), "scale": g.scale, "factors": g.factors,
-        }),
-        Placement::Enu(e) => json!({
-            "kind": "enu", "latitude": e.latitude_deg, "longitude": e.longitude_deg,
-            "orthometricHeight": e.orthometric_height, "rotationDeg": e.rotation.to_degrees(),
-        }),
-    };
-    let [lat, lon, h] = geodesy::to_geodetic(frame.origin);
-    json!({
-        "source": resolved.source,
-        "placement": placement,
-        "geoid": opts.geoid.name(),
-        "rootOrigin": { "latitude": lat, "longitude": lon, "ellipsoidalHeight": h },
-        "compress": opts.compress,
-        "instancing": opts.instancing,
-        "maxFeatures": opts.max_features,
-        "warnings": warnings,
-    })
+    Ok((uris, total))
 }

@@ -54,13 +54,11 @@ pub struct UnitScales {
     pub area: f64,
     pub volume: f64,
     pub mass: f64,
-    /// 平面角の単位→ラジアン。
-    pub plane_angle: f64,
 }
 
 impl Default for UnitScales {
     fn default() -> Self {
-        Self { length: 1.0, area: 1.0, volume: 1.0, mass: 1.0, plane_angle: 1.0 }
+        Self { length: 1.0, area: 1.0, volume: 1.0, mass: 1.0 }
     }
 }
 
@@ -100,7 +98,7 @@ mod tests {
 
     #[test]
     fn scale_lookup() {
-        let s = UnitScales { length: 1e-3, area: 1e-6, volume: 1e-9, mass: 1.0, plane_angle: 1.0 };
+        let s = UnitScales { length: 1e-3, area: 1e-6, volume: 1e-9, mass: 1.0 };
         assert_eq!(s.si(Quantity::Area), 1e-6);
     }
 }

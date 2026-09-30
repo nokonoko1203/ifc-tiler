@@ -27,10 +27,6 @@ impl Aabb {
         self
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.min[0] > self.max[0]
-    }
-
     pub fn center(&self) -> [f64; 3] {
         std::array::from_fn(|i| 0.5 * (self.min[i] + self.max[i]))
     }
@@ -165,7 +161,6 @@ mod tests {
     #[test]
     fn aabb_basics() {
         let mut b = Aabb::EMPTY;
-        assert!(b.is_empty());
         b.add([0.0, 0.0, 0.0]);
         b.add([3.0, 4.0, 0.0]);
         assert_eq!(b.diagonal(), 5.0);

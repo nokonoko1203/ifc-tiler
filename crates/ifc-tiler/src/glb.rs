@@ -2,7 +2,7 @@
 //!
 //! 直接置くメッシュは、不透明・半透明の2つのprimitiveにまとめ、色を`COLOR_0`、部材を`_FEATURE_ID_0`で
 //! 区別する。タイル内で同じ形（平行移動だけ違う）のメッシュが多ければ、テンプレート1つと
-//! `EXT_mesh_gpu_instancing`のインスタンスにする。既定では、同じ頂点を溶接し、位置をUINT16に、法線を
+//! `EXT_mesh_gpu_instancing`のインスタンスにする。同じ頂点を溶接し、位置をUINT16に、法線を
 //! INT8に量子化し（法線はOCTAHEDRALフィルタ）、`EXT_meshopt_compression`で符号化する
 //! （量子化の刻みは最大タイルで0.6 mm程度）。
 
@@ -47,23 +47,6 @@ pub struct TileMetadata<'a> {
     pub schema_id: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Encoding {
-    /// 量子化とmeshopt圧縮。
-    pub compress: bool,
-    /// 同形メッシュのインスタンス化。
-    pub instancing: bool,
-}
-
-/// 1タイルの集計（レポート用）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TileStats {
-    /// primitiveの数（描画呼び出しの目安）。
-    pub primitives: usize,
-    /// インスタンスとして置いたメッシュの数。
-    pub instances: usize,
-}
-
 const UNSIGNED_BYTE: u32 = 5121;
 const UNSIGNED_SHORT: u32 = 5123;
 const UNSIGNED_INT: u32 = 5125;
@@ -92,15 +75,13 @@ struct Instanced {
 }
 
 /// GLBのバイト列を作る。
-pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8>, TileStats) {
-    let (instanced, direct) =
-        if enc.instancing { find_instances(meshes) } else { (Vec::new(), (0..meshes.len()).collect()) };
+pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
+    let (instanced, direct) = find_instances(meshes);
     let groups = group_by_opacity(meshes, &direct);
     let mut w = Writer::default();
     let mut materials = Materials::default();
     let mut gltf_meshes = Vec::new();
     let mut nodes = Vec::new();
-    let mut stats = TileStats::default();
 
     if !groups.is_empty() {
         // 位置の量子化は、タイル全体で1つの一様な倍率にする（非一様だと法線がゆがむ）
@@ -108,45 +89,36 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8
             b.add(p.map(f64::from));
             b
         });
-        let dequant = enc.compress.then(|| quantization(&bounds));
+        let (min, step) = quantization(&bounds);
         let feature_ids = json!({ "EXT_mesh_features": { "featureIds": [{
             "featureCount": meta.rows.len(), "attribute": 0, "propertyTable": 0, "label": "element"
         }] } });
         let mut primitives = Vec::new();
         for (translucent, g) in &groups {
-            let mut p = match dequant {
-                Some((min, step)) => w.quantized(g, min, step),
-                None => w.float(g),
-            };
+            let mut p = w.quantized(g, min, step);
             p.insert("material".into(), materials.get(MaterialKey::VertexColor { translucent: *translucent }).into());
             p.insert("extensions".into(), feature_ids.clone());
             primitives.push(Value::Object(p));
         }
-        let mut node = json!({ "mesh": 0 });
-        if let Some((min, step)) = dequant {
-            node["matrix"] = json!([step, 0, 0, 0, 0, step, 0, 0, 0, 0, step, 0, min[0], min[1], min[2], 1]);
-        }
-        stats.primitives += primitives.len();
         gltf_meshes.push(json!({ "primitives": primitives }));
-        nodes.push(node);
+        nodes.push(json!({
+            "mesh": 0,
+            "matrix": [step, 0, 0, 0, 0, step, 0, 0, 0, 0, step, 0, min[0], min[1], min[2], 1],
+        }));
     }
 
     for inst in &instanced {
         let m = &meshes[inst.template];
         let origin = inst.instances[0].1;
         let g = template_group(m, origin);
-        let (mut p, offset, scale) = if enc.compress {
-            let bounds = g.positions.iter().fold(Aabb::EMPTY, |mut b, p| {
-                b.add(p.map(f64::from));
-                b
-            });
-            let (min, step) = quantization(&bounds);
-            (w.quantized(&g, min, step), min, Some(step))
-        } else {
-            (w.float(&g), [0.0; 3], None)
-        };
+        let bounds = g.positions.iter().fold(Aabb::EMPTY, |mut b, p| {
+            b.add(p.map(f64::from));
+            b
+        });
+        let (offset, step) = quantization(&bounds);
+        let mut p = w.quantized(&g, offset, step);
         p.insert("material".into(), materials.get(MaterialKey::Color(color_key(m.color))).into());
-        // インスタンスの平行移動（Y上）＝最小点＋テンプレートの量子化の原点。圧縮時は刻みを倍率にする
+        // インスタンスの平行移動（Y上）＝最小点＋テンプレートの量子化の原点。倍率は量子化の刻み
         let translation: Vec<f32> = inst
             .instances
             .iter()
@@ -156,10 +128,8 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8
         let n = inst.instances.len();
         let mut attributes = Map::new();
         attributes.insert("TRANSLATION".into(), w.instance_accessor(&translation, n, "VEC3").into());
-        if let Some(step) = scale {
-            let s = vec![step as f32; 3 * n];
-            attributes.insert("SCALE".into(), w.instance_accessor(&s, n, "VEC3").into());
-        }
+        let s = vec![step as f32; 3 * n];
+        attributes.insert("SCALE".into(), w.instance_accessor(&s, n, "VEC3").into());
         attributes.insert("_FEATURE_ID_0".into(), w.instance_accessor(&features, n, "SCALAR").into());
         nodes.push(json!({
             "mesh": gltf_meshes.len(),
@@ -171,8 +141,6 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8
             }
         }));
         gltf_meshes.push(json!({ "primitives": [Value::Object(p)] }));
-        stats.primitives += 1;
-        stats.instances += n;
     }
 
     // メタデータ（非圧縮のままbuffer 0へ）
@@ -182,23 +150,18 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8
         schema["enums"] = json!({ LOGICAL_ENUM_ID: logical_enum() });
     }
 
-    let mut used = vec!["EXT_mesh_features", "EXT_structural_metadata"];
-    let mut required = Vec::new();
-    if enc.compress {
-        used.extend(["EXT_meshopt_compression", "KHR_mesh_quantization"]);
-        required.extend(["EXT_meshopt_compression", "KHR_mesh_quantization"]);
-    }
+    let mut used =
+        vec!["EXT_mesh_features", "EXT_structural_metadata", "EXT_meshopt_compression", "KHR_mesh_quantization"];
+    let mut required = vec!["EXT_meshopt_compression", "KHR_mesh_quantization"];
     if !instanced.is_empty() {
         used.extend(["EXT_mesh_gpu_instancing", "EXT_instance_features"]);
         required.push("EXT_mesh_gpu_instancing");
     }
-    let mut buffers = vec![json!({ "byteLength": w.bin.len() })];
-    if enc.compress {
-        buffers.push(
-            json!({ "byteLength": w.fallback_len, "extensions": { "EXT_meshopt_compression": { "fallback": true } } }),
-        );
-    }
-    let mut gltf = json!({
+    let buffers = json!([
+        { "byteLength": w.bin.len() },
+        { "byteLength": w.fallback_len, "extensions": { "EXT_meshopt_compression": { "fallback": true } } },
+    ]);
+    let gltf = json!({
         "asset": { "version": "2.0", "generator": concat!("ifc-tiler ", env!("CARGO_PKG_VERSION")) },
         "extensionsUsed": used,
         "scene": 0,
@@ -210,11 +173,9 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata, enc: Encoding) -> (Vec<u8
         "bufferViews": w.views,
         "buffers": buffers,
         "extensions": { "EXT_structural_metadata": { "schema": schema, "propertyTables": [property_table] } },
+        "extensionsRequired": required,
     });
-    if !required.is_empty() {
-        gltf["extensionsRequired"] = json!(required);
-    }
-    (pack(&gltf, &w.bin), stats)
+    pack(&gltf, &w.bin)
 }
 
 /// 外接箱から、一様な量子化の原点と刻み（最大辺 ÷ 65535）を決める。
@@ -372,15 +333,6 @@ impl Materials {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct FloatVertex {
-    p: [f32; 3],
-    n: [f32; 3],
-    c: [u8; 4],
-    f: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
 struct QuantVertex {
     p: [u16; 4],
     n: [i8; 4],
@@ -434,13 +386,6 @@ impl Writer {
         self.views.len() - 1
     }
 
-    fn vertex_view(&mut self, bytes: Vec<u8>, stride: usize) -> usize {
-        let i = self.plain_view(bytes);
-        self.views[i]["byteStride"] = stride.into();
-        self.views[i]["target"] = ARRAY_BUFFER.into();
-        i
-    }
-
     /// meshoptで符号化したbufferView。`mode`は`ATTRIBUTES`か`TRIANGLES`。
     fn meshopt_view(&mut self, raw_len: usize, encoded: Vec<u8>, stride: usize, count: usize, mode: &str) -> usize {
         self.align_bin();
@@ -486,63 +431,12 @@ impl Writer {
         self.accessor(view, FLOAT, count, ty, json!({}))
     }
 
-    fn indices(&mut self, idx: &[u32], vertex_count: usize, compress: bool) -> usize {
-        let small = vertex_count <= usize::from(u16::MAX);
-        let (component, size) = if small { (UNSIGNED_SHORT, 2) } else { (UNSIGNED_INT, 4) };
-        let view = if compress {
-            let encoded = encode_index_buffer(idx, vertex_count).expect("meshoptの索引符号化");
-            self.meshopt_view(idx.len() * size, encoded, size, idx.len(), "TRIANGLES")
-        } else {
-            let bytes: Vec<u8> = if small {
-                idx.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
-            } else {
-                idx.iter().flat_map(|i| i.to_le_bytes()).collect()
-            };
-            let v = self.plain_view(bytes);
-            self.views[v]["target"] = ELEMENT_ARRAY_BUFFER.into();
-            v
-        };
+    fn indices(&mut self, idx: &[u32], vertex_count: usize) -> usize {
+        let (component, size) =
+            if vertex_count <= usize::from(u16::MAX) { (UNSIGNED_SHORT, 2) } else { (UNSIGNED_INT, 4) };
+        let encoded = encode_index_buffer(idx, vertex_count).expect("meshoptの索引符号化");
+        let view = self.meshopt_view(idx.len() * size, encoded, size, idx.len(), "TRIANGLES");
         self.accessor(view, component, idx.len(), "SCALAR", json!({}))
-    }
-
-    /// 非圧縮のprimitive。`g`に色・部材番号があれば`COLOR_0`・`_FEATURE_ID_0`を書く。
-    fn float(&mut self, g: &Group) -> Map<String, Value> {
-        let verts: Vec<FloatVertex> = (0..g.positions.len())
-            .map(|i| FloatVertex {
-                p: g.positions[i],
-                n: g.normals[i],
-                c: g.colors.get(i).copied().unwrap_or_default(),
-                f: g.features.get(i).copied().unwrap_or_default(),
-            })
-            .collect();
-        let (v, idx) = weld(&verts, &g.indices);
-        let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-        for x in &v {
-            for k in 0..3 {
-                min[k] = min[k].min(x.p[k]);
-                max[k] = max[k].max(x.p[k]);
-            }
-        }
-        let n = v.len();
-        let pos = self.vertex_view(v.iter().flat_map(|x| x.p.iter().flat_map(|c| c.to_le_bytes())).collect(), 12);
-        let nor = self.vertex_view(v.iter().flat_map(|x| x.n.iter().flat_map(|c| c.to_le_bytes())).collect(), 12);
-        let mut attributes = Map::new();
-        attributes
-            .insert("POSITION".into(), self.accessor(pos, FLOAT, n, "VEC3", json!({ "min": min, "max": max })).into());
-        attributes.insert("NORMAL".into(), self.accessor(nor, FLOAT, n, "VEC3", json!({})).into());
-        if !g.colors.is_empty() {
-            let col = self.vertex_view(v.iter().flat_map(|x| x.c).collect(), 4);
-            attributes.insert(
-                "COLOR_0".into(),
-                self.accessor(col, UNSIGNED_BYTE, n, "VEC4", json!({ "normalized": true })).into(),
-            );
-        }
-        if !g.features.is_empty() {
-            let fid = self.vertex_view(v.iter().flat_map(|x| x.f.to_le_bytes()).collect(), 4);
-            attributes.insert("_FEATURE_ID_0".into(), self.accessor(fid, FLOAT, n, "SCALAR", json!({})).into());
-        }
-        let indices = self.indices(&idx, n, false);
-        primitive(attributes, indices)
     }
 
     /// 量子化・meshoptのprimitive。位置は`min + step·q`で復元する（nodeの行列かインスタンスの倍率）。
@@ -594,7 +488,7 @@ impl Writer {
             let fid = self.meshopt_attribute(&v.iter().map(|x| x.f).collect::<Vec<_>>());
             attributes.insert("_FEATURE_ID_0".into(), self.accessor(fid, FLOAT, n, "SCALAR", json!({})).into());
         }
-        let indices = self.indices(&idx, n, true);
+        let indices = self.indices(&idx, n);
         primitive(attributes, indices)
     }
 }
@@ -692,10 +586,10 @@ mod tests {
 
     fn table(n: u32) -> Table {
         let e = |id| ElementRecord { express_id: id, ifc_class: "IfcWall".into(), ..Default::default() };
-        Table::build(&(1..=n).map(e).collect::<Vec<_>>(), &UnitScales::default(), true)
+        Table::build(&(1..=n).map(e).collect::<Vec<_>>(), &UnitScales::default())
     }
 
-    fn build(meshes: &[(Mesh, [f32; 4])], enc: Encoding) -> (Vec<u8>, TileStats) {
+    fn build(meshes: &[(Mesh, [f32; 4])]) -> Vec<u8> {
         let tm: Vec<TileMesh> = meshes
             .iter()
             .enumerate()
@@ -709,14 +603,12 @@ mod tests {
             .collect();
         let t = table(meshes.len() as u32);
         let rows: Vec<usize> = (0..meshes.len()).collect();
-        write(&tm, &TileMetadata { table: &t, rows: &rows, schema_id: "t" }, enc)
+        write(&tm, &TileMetadata { table: &t, rows: &rows, schema_id: "t" })
     }
 
     const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
     const GREY: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
     const GLASS: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
-    const PLAIN: Encoding = Encoding { compress: false, instancing: true };
-    const PACKED: Encoding = Encoding { compress: true, instancing: true };
 
     fn u(v: &Value) -> usize {
         v.as_u64().unwrap() as usize
@@ -751,20 +643,17 @@ mod tests {
     #[test]
     fn colors_become_vertex_colors_in_two_primitives() {
         let meshes = [(cube([0., 0., 0.]), RED), (cube([2., 0., 0.]), GREY), (cube([4., 0., 0.]), GLASS)];
-        let (glb, stats) = build(&meshes, PLAIN);
+        let glb = build(&meshes);
         let (js, _) = read(&glb);
         assert_eq!(glb.len() % 4, 0);
         let prims = js["meshes"][0]["primitives"].as_array().unwrap();
         assert_eq!(prims.len(), 2);
-        assert_eq!(stats, TileStats { primitives: 2, instances: 0 });
+        assert_eq!(js["meshes"].as_array().unwrap().len(), 1);
         assert!(prims.iter().all(|p| p["attributes"].get("COLOR_0").is_some()));
         // 不透明（赤・灰）が先、半透明が後。材料は白で、半透明はBLEND
         assert_eq!(js["accessors"][u(&prims[0]["attributes"]["POSITION"])]["count"], 48);
         assert!(js["materials"][0]["pbrMetallicRoughness"].get("baseColorFactor").is_none());
         assert_eq!(js["materials"][u(&prims[1]["material"])]["alphaMode"], "BLEND");
-        assert!(js.get("extensionsRequired").is_none());
-        // 位置はY上。z上の(0..1)がglTFのyに、−y（−1..0）がzに来る
-        assert_eq!(js["accessors"][u(&prims[0]["attributes"]["POSITION"])]["min"], json!([0.0, 0.0, -1.0]));
         for v in js["bufferViews"].as_array().unwrap() {
             assert_eq!(u(&v["byteOffset"]) % 8, 0);
         }
@@ -773,7 +662,7 @@ mod tests {
 
     #[test]
     fn compressed_positions_and_octahedral_normals_round_trip() {
-        let (glb, _) = build(&[(cube([10., 10., 10.]), RED)], PACKED);
+        let glb = build(&[(cube([10., 10., 10.]), RED)]);
         let (js, bin) = read(&glb);
         assert_eq!(js["extensionsRequired"], json!(["EXT_meshopt_compression", "KHR_mesh_quantization"]));
         let m: Vec<f64> = js["nodes"][0]["matrix"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
@@ -801,57 +690,44 @@ mod tests {
         let origins = [[0., 0., 0.], [5., 0., 0.], [0., 5., 3.]];
         let mut meshes: Vec<(Mesh, [f32; 4])> = origins.iter().map(|&o| (grid(o), GREY)).collect();
         meshes.push((cube([9., 9., 9.]), RED));
-        for enc in [PLAIN, PACKED] {
-            let (glb, stats) = build(&meshes, enc);
-            let (js, bin) = read(&glb);
-            assert_eq!(stats, TileStats { primitives: 2, instances: 3 }, "{enc:?}");
-            let node = &js["nodes"][1];
-            let ext = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
-            assert_eq!(js["extensionsRequired"].as_array().unwrap().last().unwrap(), "EXT_mesh_gpu_instancing");
-            assert_eq!(node["extensions"]["EXT_instance_features"]["featureIds"][0]["featureCount"], 4);
-            let f32s = |a: &Value| -> Vec<f32> {
-                view(&js, bin, u(&js["accessors"][u(a)]["bufferView"]))
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                    .collect()
-            };
-            assert_eq!(f32s(&ext["_FEATURE_ID_0"]), vec![0.0, 1.0, 2.0]);
-            let t = f32s(&ext["TRANSLATION"]);
-            let s = if enc.compress { f64::from(f32s(&ext["SCALE"])[0]) } else { 1.0 };
-            // テンプレートの全頂点をインスタンスの変換で戻した外接箱が、元の各格子（Y上）の外接箱と一致する
-            let prim = &js["meshes"][u(&node["mesh"])]["primitives"][0];
-            let pa = &js["accessors"][u(&prim["attributes"]["POSITION"])];
-            let pos = view(&js, bin, u(&pa["bufferView"]));
-            let stride = if enc.compress { 8 } else { 12 };
-            let local: Vec<[f64; 3]> = pos
-                .chunks_exact(stride)
-                .map(|v| {
-                    std::array::from_fn(|c| {
-                        if enc.compress {
-                            f64::from(u16::from_le_bytes(v[2 * c..2 * c + 2].try_into().unwrap()))
-                        } else {
-                            f64::from(f32::from_le_bytes(v[4 * c..4 * c + 4].try_into().unwrap()))
-                        }
-                    })
+        let glb = build(&meshes);
+        let (js, bin) = read(&glb);
+        // 格子3つはテンプレート1つ＋インスタンス3つ、立方体は直接置く
+        assert_eq!(js["meshes"].as_array().unwrap().len(), 2);
+        let node = &js["nodes"][1];
+        let ext = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+        assert_eq!(js["extensionsRequired"].as_array().unwrap().last().unwrap(), "EXT_mesh_gpu_instancing");
+        assert_eq!(node["extensions"]["EXT_instance_features"]["featureIds"][0]["featureCount"], 4);
+        let f32s = |a: &Value| -> Vec<f32> {
+            view(&js, bin, u(&js["accessors"][u(a)]["bufferView"]))
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        };
+        assert_eq!(f32s(&ext["_FEATURE_ID_0"]), vec![0.0, 1.0, 2.0]);
+        let t = f32s(&ext["TRANSLATION"]);
+        let s = f64::from(f32s(&ext["SCALE"])[0]);
+        // テンプレートの全頂点をインスタンスの変換で戻した外接箱が、元の各格子（Y上）の外接箱と一致する
+        let prim = &js["meshes"][u(&node["mesh"])]["primitives"][0];
+        let pa = &js["accessors"][u(&prim["attributes"]["POSITION"])];
+        let pos = view(&js, bin, u(&pa["bufferView"]));
+        let local: Vec<[f64; 3]> = pos
+            .chunks_exact(8)
+            .map(|v| std::array::from_fn(|c| f64::from(u16::from_le_bytes(v[2 * c..2 * c + 2].try_into().unwrap()))))
+            .collect();
+        for (i, o) in origins.iter().enumerate() {
+            let placed: Vec<[f64; 3]> =
+                local.iter().map(|q| std::array::from_fn(|c| f64::from(t[3 * i + c]) + s * q[c])).collect();
+            let (want, _, _) = grid(*o);
+            let want: Vec<[f64; 3]> = want.iter().map(|q| [q[0], q[2], -q[1]]).collect();
+            let bbox = |v: &[[f64; 3]]| {
+                v.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(a, b), p| {
+                    (std::array::from_fn(|c| a[c].min(p[c])), std::array::from_fn(|c| b[c].max(p[c])))
                 })
-                .collect();
-            for (i, o) in origins.iter().enumerate() {
-                let placed: Vec<[f64; 3]> =
-                    local.iter().map(|q| std::array::from_fn(|c| f64::from(t[3 * i + c]) + s * q[c])).collect();
-                let (want, _, _) = grid(*o);
-                let want: Vec<[f64; 3]> = want.iter().map(|q| [q[0], q[2], -q[1]]).collect();
-                let bbox = |v: &[[f64; 3]]| {
-                    v.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(a, b), p| {
-                        (std::array::from_fn(|c| a[c].min(p[c])), std::array::from_fn(|c| b[c].max(p[c])))
-                    })
-                };
-                let (got, exp) = (bbox(&placed), bbox(&want));
-                for c in 0..3 {
-                    assert!(
-                        (got.0[c] - exp.0[c]).abs() < 1e-3 && (got.1[c] - exp.1[c]).abs() < 1e-3,
-                        "{enc:?} {got:?} {exp:?}"
-                    );
-                }
+            };
+            let (got, exp) = (bbox(&placed), bbox(&want));
+            for c in 0..3 {
+                assert!((got.0[c] - exp.0[c]).abs() < 1e-3 && (got.1[c] - exp.1[c]).abs() < 1e-3, "{got:?} {exp:?}");
             }
         }
     }
@@ -862,13 +738,8 @@ mod tests {
         let small: Vec<(Mesh, [f32; 4])> = (0..5).map(|i| (cube([2.0 * f64::from(i), 0., 0.]), GREY)).collect();
         let recolored = vec![(grid([0., 0., 0.]), GREY), (grid([5., 0., 0.]), GREY), (grid([9., 0., 0.]), RED)];
         for meshes in [two, small, recolored] {
-            let (glb, stats) = build(&meshes, PACKED);
-            assert_eq!(stats.instances, 0);
-            let (js, _) = read(&glb);
+            let (js, _) = read(&build(&meshes));
             assert!(!js["extensionsUsed"].as_array().unwrap().contains(&json!("EXT_mesh_gpu_instancing")));
         }
-        let off = Encoding { instancing: false, ..PACKED };
-        let three: Vec<(Mesh, [f32; 4])> = (0..3).map(|i| (grid([5.0 * f64::from(i), 0., 0.]), GREY)).collect();
-        assert_eq!(build(&three, off).1.instances, 0);
     }
 }

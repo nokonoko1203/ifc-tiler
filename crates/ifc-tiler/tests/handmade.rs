@@ -1,21 +1,20 @@
-//! 自作IFC（testdata/handmade）を変換し、出力を読み戻して確かめる（受け入れ条件A1・A2・A4）。
+//! 自作IFC（testdata/handmade）を変換し、出力を読み戻して確かめる。
 //!
-//! 既定の出力（量子化＋meshopt）をmeshoptで復号し、既知点の位置と部材の属性を見る。
+//! 出力（量子化＋meshopt）を復号し、既知点の位置と部材の属性を見る。
 //! 期待値は testdata/handmade/expected.json（国土地理院の計算結果）。
 
 mod common;
 
 use std::path::PathBuf;
 
-use common::{Feature, options, out_dir, read_tileset, root};
-use ifc_tiler::geodesy::GeoidModel;
-use ifc_tiler::georef::SiteCoords;
-use ifc_tiler::{Options, convert};
+use common::{Feature, out_dir, read_tileset, root};
+use ifc_tiler::convert;
+use ifc_tiler::georef::GeorefOptions;
 use serde_json::Value;
 
 const CUBE: &str = "既知点立方体";
 
-fn run(file: &str, name: &str, opts: &Options) -> PathBuf {
+fn run(file: &str, name: &str, opts: &GeorefOptions) -> PathBuf {
     let out = out_dir(&format!("handmade/{name}"));
     convert(&root().join("testdata/handmade").join(file), &out, opts).expect("変換できる");
     out
@@ -46,77 +45,60 @@ fn cube_error(features: &[Feature], geoid_key: &str) -> f64 {
 
 #[test]
 fn map_conversion_known_point() {
-    let f = read_tileset(&run("ifc4_map_conversion.ifc", "mapconv", &options()));
+    let f = read_tileset(&run("ifc4_map_conversion.ifc", "mapconv", &GeorefOptions::default()));
     let e = cube_error(&f, "geoid_height_jpgeo2024_m");
     assert!(e < 0.01, "{e}");
 }
 
 #[test]
-fn wrong_geoid_model_is_detectable() {
-    let opts = Options { geoid: GeoidModel::Gsigeo2011, ..options() };
-    let f = read_tileset(&run("ifc4_map_conversion.ifc", "mapconv_gsigeo2011", &opts));
-    // 期待値（JPGEO2024）とは約0.1 mずれ、GSIGEO2011の期待値とは一致する
-    assert!((cube_error(&f, "geoid_height_jpgeo2024_m") - 0.0989).abs() < 0.01);
-    assert!(cube_error(&f, "geoid_height_gsigeo2011_m") < 0.01);
-}
-
-#[test]
 fn site_lat_lon_known_point() {
-    let f = read_tileset(&run("ifc2x3_site_latlon.ifc", "site_latlon", &options()));
+    let f = read_tileset(&run("ifc2x3_site_latlon.ifc", "site_latlon", &GeorefOptions::default()));
     assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
 }
 
+/// 局所座標が平面直角座標の値のIFCを、IfcSiteの経緯度を原点とするENUで置くと大きくずれ、警告が出る。
 #[test]
-fn plateau_grid_known_point_and_enu_mistake() {
-    let mut grid = options();
-    grid.georef.site_coords = SiteCoords::Grid;
-    grid.georef.crs_epsg = Some(6677);
-    let f = read_tileset(&run("ifc2x3_plateau_origin.ifc", "plateau_grid", &grid));
-    assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
-
+fn plan_coordinates_in_enu_are_warned() {
     let out = out_dir("handmade/plateau_enu");
-    let r = convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &options()).unwrap();
+    let r =
+        convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &GeorefOptions::default()).unwrap();
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert!(cube_error(&read_tileset(&out), "geoid_height_jpgeo2024_m") > 100.0);
 }
 
-/// 受け入れ条件A11: 局所座標が平面直角座標の値のIFCを、`--map-conversion 0,0 --crs`だけで置ける。
+/// 局所座標が平面直角座標の値のIFCを、`--map-conversion 0,0 --crs`だけで置ける。
 #[test]
 fn map_conversion_option_places_plan_coordinates() {
-    let mut opts = options();
-    opts.georef.map_conversion = Some([0.0, 0.0, 0.0, 0.0]);
-    opts.georef.crs_epsg = Some(6677);
+    let mut opts =
+        GeorefOptions { map_conversion: Some([0.0, 0.0, 0.0, 0.0]), crs_epsg: Some(6677), ..Default::default() };
     let f = read_tileset(&run("ifc2x3_plateau_origin.ifc", "plateau_map_conversion", &opts));
     assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
 
-    opts.georef.crs_epsg = None;
+    opts.crs_epsg = None;
     let out = out_dir("handmade/map_conversion_no_crs");
     let e = convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &opts).unwrap_err();
     assert!(matches!(e, ifc_tiler::Error::Input(_)), "{e}");
 }
 
-/// `--map-conversion`は`--origin`・`--site-coords grid`と同時に指定できない（終了コード2）。
+/// `--map-conversion`は`--origin`と同時に指定できない（終了コード2）。
 #[test]
-fn map_conversion_conflicts_are_input_errors() {
+fn map_conversion_conflicts_with_origin() {
     let input = root().join("testdata/handmade/ifc2x3_plateau_origin.ifc");
-    for extra in [&["--origin", "35,139"][..], &["--site-coords", "grid"][..]] {
-        let out = out_dir("handmade/map_conversion_conflict");
-        let status = std::process::Command::new(env!("CARGO_BIN_EXE_ifc_tiler"))
-            .arg(&input)
-            .arg("-o")
-            .arg(&out)
-            .args(["--map-conversion", "0,0", "--crs", "EPSG:6677"])
-            .args(extra)
-            .output()
-            .unwrap()
-            .status;
-        assert_eq!(status.code(), Some(2), "{extra:?}");
-    }
+    let out = out_dir("handmade/map_conversion_conflict");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_ifc_tiler"))
+        .arg(&input)
+        .arg("-o")
+        .arg(&out)
+        .args(["--map-conversion", "0,0", "--crs", "EPSG:6677", "--origin", "35,139"])
+        .output()
+        .unwrap()
+        .status;
+    assert_eq!(status.code(), Some(2));
 }
 
 #[test]
 fn element_semantics() {
-    let features = read_tileset(&run("ifc4_map_conversion.ifc", "semantics", &options()));
+    let features = read_tileset(&run("ifc4_map_conversion.ifc", "semantics", &GeorefOptions::default()));
     let by_name = |n: &str| {
         features
             .iter()

@@ -7,7 +7,7 @@ use std::cell::Cell;
 
 use geocentric::{geocentric_to_geodetic, geodetic_to_geocentric};
 use japan_geoid::Geoid as _;
-use japan_geoid::gsi::{MemoryGrid, load_embedded_gsigeo2011, load_embedded_jpgeo2024_hrefconv2024};
+use japan_geoid::gsi::{MemoryGrid, load_embedded_jpgeo2024_hrefconv2024};
 
 use crate::georef::Placement;
 
@@ -20,30 +20,14 @@ fn e_sq() -> f64 {
     f * (2.0 - f)
 }
 
-/// 正標高→楕円体高に使うジオイドモデル。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeoidModel {
-    /// JPGEO2024＋Hrefconv2024（国土地理院「ジオイド2024日本とその周辺」）。
-    Jpgeo2024,
-    Gsigeo2011,
-    /// 正標高をそのまま楕円体高とみなす。
-    None,
-}
-
-impl GeoidModel {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Jpgeo2024 => "JPGEO2024+Hrefconv2024",
-            Self::Gsigeo2011 => "GSIGEO2011",
-            Self::None => "none",
-        }
-    }
-}
+/// 正標高→楕円体高に使うジオイドモデル（国土地理院「ジオイド2024日本とその周辺」）。
+/// JPGEO2024＋Hrefconv2024。本土ではHrefconv2024が0で、離島では標高基準面の差が加わる。
+pub const GEOID_NAME: &str = "JPGEO2024+Hrefconv2024";
 
 /// 局所座標 [m] → ECEF [m]。
 pub struct Projector {
     placement: Placement,
-    geoid: Option<MemoryGrid<'static>>,
+    geoid: MemoryGrid<'static>,
     /// ENU経路の原点のECEFと基底。
     enu: Option<Frame>,
     /// ジオイドの範囲外で0とした点の数。
@@ -51,12 +35,8 @@ pub struct Projector {
 }
 
 impl Projector {
-    pub fn new(placement: Placement, model: GeoidModel) -> Self {
-        let geoid = match model {
-            GeoidModel::Jpgeo2024 => Some(load_embedded_jpgeo2024_hrefconv2024()),
-            GeoidModel::Gsigeo2011 => Some(load_embedded_gsigeo2011()),
-            GeoidModel::None => None,
-        };
+    pub fn new(placement: Placement) -> Self {
+        let geoid = load_embedded_jpgeo2024_hrefconv2024();
         let mut p = Self { placement, geoid, enu: None, geoid_misses: Cell::new(0) };
         if let Placement::Enu(e) = placement {
             let h = e.orthometric_height + p.geoid_height(e.longitude_deg, e.latitude_deg);
@@ -70,8 +50,7 @@ impl Projector {
     }
 
     fn geoid_height(&self, lon: f64, lat: f64) -> f64 {
-        let Some(g) = &self.geoid else { return 0.0 };
-        let h = g.get_height(lon, lat);
+        let h = self.geoid.get_height(lon, lat);
         if h.is_finite() {
             h
         } else {
@@ -215,7 +194,7 @@ mod tests {
 
     #[test]
     fn grid_known_point_matches_gsi() {
-        let p = Projector::new(grid(), GeoidModel::Jpgeo2024);
+        let p = Projector::new(grid());
         let got = p.to_ecef([0.0, 0.0, 0.0]).unwrap();
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
         // 国土地理院の値の丸め（0.1 mm、1e-6度≈0.1 m）を踏まえ、1 cm以内
@@ -231,7 +210,7 @@ mod tests {
             orthometric_height: 3.0,
             rotation: 0.0,
         });
-        let p = Projector::new(e, GeoidModel::Jpgeo2024);
+        let p = Projector::new(e);
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
         assert!(dist(p.to_ecef([0.0; 3]).unwrap(), want) < 1e-3);
     }
@@ -244,7 +223,7 @@ mod tests {
             orthometric_height: 0.0,
             rotation: 0.0,
         });
-        let p = Projector::new(e, GeoidModel::Jpgeo2024);
+        let p = Projector::new(e);
         assert_eq!(p.geoid_misses(), 1);
     }
 
@@ -264,7 +243,7 @@ mod tests {
     fn rotation_in_grid_includes_meridian_convergence() {
         // IX系の既知点（中央子午線の西）では子午線収差が0.038616667°。
         // 地図の東（局所+X）は、真東から反時計回り（北寄り）にその角度だけ回っている
-        let p = Projector::new(grid(), GeoidModel::None);
+        let p = Projector::new(grid());
         let frame = Frame::at_ecef(p.to_ecef([0.0; 3]).unwrap());
         let r = p.rotation_at([0.0; 3], &frame).unwrap();
         let angle = r[0][1].atan2(r[0][0]).to_degrees();

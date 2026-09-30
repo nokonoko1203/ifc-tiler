@@ -3,8 +3,7 @@
 //! - 形状: ifc-liteのメッシュを、IFCの世界座標（メートル、z上）に戻す。
 //! - 属性: 部材ごとの属性とPset / Qto（型の値を継承し、部材側の値で上書き済み）。
 //! - 関係: 集約（`IfcRelAggregates`）、空間への所属（`IfcRelContainedInSpatialStructure`）、型。
-//! - ジオリファレンスと単位: ifc-liteの抽出関数は`IfcRigidOperation`を扱わず、(0,0)の`IfcSite`も
-//!   有効とみなすため、エンティティを直接読む。
+//! - ジオリファレンスと単位: ifc-liteの抽出関数は(0,0)の`IfcSite`も有効とみなすため、エンティティを直接読む。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,7 +17,7 @@ use ifc_lite_processing::{
     process_geometry_streaming_filtered_with_options,
 };
 
-use crate::georef::{Crs, MapConversion, RawGeoref, RigidOperation, SiteReference};
+use crate::georef::{Crs, MapConversion, RawGeoref, SiteReference};
 use crate::metadata::{Logical, Property, Value};
 use crate::units::{Quantity, UnitScales};
 
@@ -34,8 +33,6 @@ pub struct Product {
     pub predefined_type: Option<String>,
     /// `IfcBuildingStorey.Elevation` [m]。
     pub elevation_m: Option<f64>,
-    /// 形状表現（`Representation`）を持つ。
-    pub has_representation: bool,
     pub properties: Vec<Property>,
 }
 
@@ -51,7 +48,6 @@ pub struct Mesh {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SourceModel {
-    pub schema: String,
     pub products: HashMap<u32, Product>,
     pub meshes: Vec<Mesh>,
     /// 部品→全体（`IfcRelAggregates`）。
@@ -66,7 +62,7 @@ pub struct SourceModel {
 
 pub fn read(bytes: &[u8]) -> SourceModel {
     let index = Arc::new(build_entity_index_parallel(bytes));
-    let mut model = SourceModel { schema: schema(bytes), ..Default::default() };
+    let mut model = SourceModel::default();
 
     let opts = ModelOptions::default().with_inherit_type_properties(true).with_attributes(true);
     let mut rows = Vec::new();
@@ -80,7 +76,6 @@ pub fn read(bytes: &[u8]) -> SourceModel {
         area: si("IFCAREAMEASURE"),
         volume: si("IFCVOLUMEMEASURE"),
         mass: si("IFCMASSMEASURE"),
-        plane_angle: scales.plane_angle_to_radians,
     };
     for row in rows {
         let (id, product) = product(row, model.units.length);
@@ -90,11 +85,6 @@ pub fn read(bytes: &[u8]) -> SourceModel {
     model.meshes = meshes(bytes);
     scan_relations_and_georef(bytes, &mut decoder, &mut model);
     model
-}
-
-fn schema(bytes: &[u8]) -> String {
-    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
-    head.find("FILE_SCHEMA").and_then(|i| head[i..].split('\'').nth(1)).unwrap_or("").to_string()
 }
 
 fn product(row: EntityRow, length_m: f64) -> (u32, Product) {
@@ -129,7 +119,6 @@ fn product(row: EntityRow, length_m: f64) -> (u32, Product) {
         tag: attr("Tag"),
         predefined_type: attr("PredefinedType"),
         elevation_m: attr("Elevation").and_then(|v| v.parse::<f64>().ok()).map(|v| v * length_m),
-        has_representation: row.has_geometry,
         properties,
     };
     (row.express_id, product)
@@ -226,7 +215,6 @@ fn scan_relations_and_georef(bytes: &[u8], decoder: &mut EntityDecoder, model: &
     let mut scanner = EntityScanner::new(bytes);
     let mut type_of: Vec<(Vec<u32>, u32)> = Vec::new();
     let mut map_conversion = None;
-    let mut rigid = None;
     let mut site = None;
     let mut true_north = None;
     while let Some((id, name, start, end)) = scanner.next_entity() {
@@ -235,7 +223,6 @@ fn scan_relations_and_georef(bytes: &[u8], decoder: &mut EntityDecoder, model: &
             || is("IFCRELCONTAINEDINSPATIALSTRUCTURE")
             || is("IFCRELDEFINESBYTYPE")
             || (map_conversion.is_none() && (is("IFCMAPCONVERSION") || is("IFCMAPCONVERSIONSCALED")))
-            || (rigid.is_none() && is("IFCRIGIDOPERATION"))
             || (site.is_none() && is("IFCSITE"))
             || (true_north.is_none() && is("IFCGEOMETRICREPRESENTATIONCONTEXT"));
         if !wanted {
@@ -258,13 +245,6 @@ fn scan_relations_and_georef(bytes: &[u8], decoder: &mut EntityDecoder, model: &
             }
         } else if is("IFCMAPCONVERSION") || is("IFCMAPCONVERSIONSCALED") {
             map_conversion = Some(read_map_conversion(&e, decoder));
-        } else if is("IFCRIGIDOPERATION") {
-            rigid = Some(RigidOperation {
-                first_coordinate: e.get_float(2).unwrap_or(0.0),
-                second_coordinate: e.get_float(3).unwrap_or(0.0),
-                height: e.get_float(4).unwrap_or(0.0),
-                target: read_crs(e.get_ref(1), decoder),
-            });
         } else if is("IFCSITE") {
             site = Some(SiteReference {
                 latitude_deg: e.get(9).and_then(compound_angle),
@@ -288,14 +268,7 @@ fn scan_relations_and_georef(bytes: &[u8], decoder: &mut EntityDecoder, model: &
             model.type_name.insert(c, name.clone());
         }
     }
-    model.georef = RawGeoref {
-        map_conversion,
-        rigid_operation: rigid,
-        site,
-        true_north,
-        length_unit_m: model.units.length,
-        plane_angle_rad: model.units.plane_angle,
-    };
+    model.georef = RawGeoref { map_conversion, site, true_north, length_unit_m: model.units.length };
 }
 
 fn read_map_conversion(e: &DecodedEntity, decoder: &mut EntityDecoder) -> MapConversion {
@@ -314,14 +287,12 @@ fn read_map_conversion(e: &DecodedEntity, decoder: &mut EntityDecoder) -> MapCon
 
 fn read_crs(id: Option<u32>, decoder: &mut EntityDecoder) -> Crs {
     let Some(e) = id.and_then(|i| decoder.decode_by_id(i).ok()) else { return Crs::Missing };
-    let name = e.get_string(0).map(str::to_string);
-    let mut unit = |i: usize| e.get_ref(i).and_then(|u| resolve_unit_by_ref(decoder, u)).map(|(_, u, _)| u.si_scale);
-    match e.ifc_type.name().to_ascii_uppercase().as_str() {
-        "IFCPROJECTEDCRS" => Crs::Projected { name, map_unit_m: unit(6) },
-        // IFC4.3: Name, Description, GeodeticDatum, PrimeMeridian, AngleUnit, HeightUnit
-        "IFCGEOGRAPHICCRS" => Crs::Geographic { name, angle_unit_rad: unit(4), height_unit_m: unit(5) },
-        _ => Crs::Missing,
+    if !e.ifc_type.name().eq_ignore_ascii_case("IFCPROJECTEDCRS") {
+        return Crs::Missing;
     }
+    let name = e.get_string(0).map(str::to_string);
+    let map_unit_m = e.get_ref(6).and_then(|u| resolve_unit_by_ref(decoder, u)).map(|(_, u, _)| u.si_scale);
+    Crs::Projected { name, map_unit_m }
 }
 
 /// `IfcCompoundPlaneAngleMeasure`（度・分・秒・百万分の1秒。各要素は同じ符号）→ 度。

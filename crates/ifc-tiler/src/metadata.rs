@@ -182,7 +182,7 @@ fn fixed_values(e: &ElementRecord) -> [Option<Value>; 12] {
 
 impl Table {
     /// 列を決め、値をSI単位へ換算する。
-    pub fn build(elements: &[ElementRecord], units: &UnitScales, include_properties: bool) -> Self {
+    pub fn build(elements: &[ElementRecord], units: &UnitScales) -> Self {
         let mut columns: Vec<Column> = FIXED
             .iter()
             .enumerate()
@@ -196,10 +196,6 @@ impl Table {
             })
             .collect();
         let mut rows: Vec<Vec<Option<Value>>> = elements.iter().map(|e| fixed_values(e).to_vec()).collect();
-        if !include_properties {
-            return Self { columns, rows };
-        }
-
         // (Pset名, プロパティ名) → 部材ごとの値
         let mut by_key: BTreeMap<(&str, &str), Vec<(usize, &Property)>> = BTreeMap::new();
         for (i, e) in elements.iter().enumerate() {
@@ -430,7 +426,6 @@ mod tests {
         let t = Table::build(
             &[element(1, vec![prop("A B", "c", Value::Int(1), None), prop("A_B", "c", Value::Int(2), None)])],
             &UnitScales::default(),
-            true,
         );
         let ids: Vec<&str> = t.columns.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A_B__c"));
@@ -462,7 +457,6 @@ mod tests {
                 ),
             ],
             &UnitScales::default(),
-            true,
         );
         let kind = |id: &str| t.columns.iter().find(|c| c.id == id).unwrap().kind;
         assert_eq!(kind("P__b"), Kind::Logical);
@@ -475,7 +469,7 @@ mod tests {
 
     #[test]
     fn measures_are_converted_to_si() {
-        let units = UnitScales { length: 0.001, area: 1e-6, volume: 1e-9, mass: 1.0, plane_angle: 1.0 };
+        let units = UnitScales { length: 0.001, area: 1e-6, volume: 1e-9, mass: 1.0 };
         let t = Table::build(
             &[element(
                 1,
@@ -486,7 +480,6 @@ mod tests {
                 ],
             )],
             &units,
-            true,
         );
         let get = |id: &str| {
             let j = t.columns.iter().position(|c| c.id == id).unwrap();
@@ -499,11 +492,8 @@ mod tests {
 
     #[test]
     fn empty_strings_do_not_make_columns() {
-        let t = Table::build(
-            &[element(1, vec![prop("P", "e", Value::Text(String::new()), None)])],
-            &UnitScales::default(),
-            true,
-        );
+        let t =
+            Table::build(&[element(1, vec![prop("P", "e", Value::Text(String::new()), None)])], &UnitScales::default());
         assert!(t.columns.iter().all(|c| c.id != "P__e"));
     }
 
@@ -515,7 +505,6 @@ mod tests {
                 element(2, vec![prop("P", "b", Value::Text("x".into()), None)]),
             ],
             &UnitScales::default(),
-            true,
         );
         let mut views: Vec<Vec<u8>> = Vec::new();
         let (class, table) = t.encode(&[1], &mut |b| {
@@ -537,14 +526,14 @@ mod tests {
         // INT64はCesiumJSでBigIntになり、noDataが効かないため使わない
         let e = |id, n| element(id, vec![prop("P", "n", Value::Int(n), None)]);
         let kind = |t: &Table| t.columns.iter().find(|c| c.id == "P__n").unwrap().kind;
-        let wide = Table::build(&[e(1, 1), e(2, 1 << 40)], &UnitScales::default(), true);
+        let wide = Table::build(&[e(1, 1), e(2, 1 << 40)], &UnitScales::default());
         assert_eq!(kind(&wide), Kind::Float64);
         let j = wide.columns.iter().position(|c| c.id == "P__n").unwrap();
         assert_eq!(wide.rows[1][j], Some(Value::Real((1i64 << 40) as f64)));
         // noDataと同じ値（i32::MIN）は区別できないのでFLOAT64にする
-        let min = Table::build(&[e(1, i64::from(i32::MIN))], &UnitScales::default(), true);
+        let min = Table::build(&[e(1, i64::from(i32::MIN))], &UnitScales::default());
         assert_eq!(kind(&min), Kind::Float64);
-        let max = Table::build(&[e(1, i64::from(i32::MAX))], &UnitScales::default(), true);
+        let max = Table::build(&[e(1, i64::from(i32::MAX))], &UnitScales::default());
         assert_eq!(kind(&max), Kind::Int32);
     }
 
@@ -563,7 +552,6 @@ mod tests {
                 element(2, vec![]),
             ],
             &UnitScales::default(),
-            true,
         );
         let mut views: Vec<Vec<u8>> = Vec::new();
         let (class, _) = t.encode(&[0, 1], &mut |b| {

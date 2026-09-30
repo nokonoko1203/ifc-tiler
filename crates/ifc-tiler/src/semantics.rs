@@ -3,16 +3,10 @@
 //! 形状を持つ製品から、開口・室・構造解析・型などを除き、集約の部品は親の部材にまとめる
 //! （多層壁の親は軸線しか持たず、Psetは親にある。部品にはPsetがない）。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::metadata::ElementRecord;
 use crate::source::{Product, SourceModel};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SemanticsOptions {
-    pub include_spaces: bool,
-    pub keep_parts: bool,
-}
 
 /// featureになる部材。
 #[derive(Clone, Debug, PartialEq)]
@@ -36,10 +30,6 @@ pub struct Semantics {
     pub elements: Vec<Element>,
     /// 標高の昇順。所属階のない部材は`(unassigned)`。
     pub storeys: Vec<Storey>,
-    /// 除外した製品のクラス別件数。
-    pub excluded: BTreeMap<String, usize>,
-    /// 形状表現を持つのにメッシュが出なかった製品のクラス別件数。
-    pub without_mesh: BTreeMap<String, usize>,
 }
 
 const SPATIAL: [&str; 20] = [
@@ -70,39 +60,24 @@ fn is_spatial(class: &str) -> bool {
 }
 
 /// featureにしない製品か。
-pub fn is_excluded(class: &str, include_spaces: bool) -> bool {
+pub fn is_excluded(class: &str) -> bool {
     matches!(class, "IfcOpeningElement" | "IfcOpeningStandardCase" | "IfcVirtualElement" | "IfcAnnotation" | "IfcGrid")
         || class.starts_with("IfcStructural")
         || class.ends_with("Type")
         || class.ends_with("Style")
-        || (class == "IfcSpace" && !include_spaces)
+        || class == "IfcSpace"
 }
 
-pub fn build(model: &SourceModel, opts: SemanticsOptions) -> Semantics {
+pub fn build(model: &SourceModel) -> Semantics {
     let mut s = Semantics::default();
-    let mut excluded_ids: HashSet<u32> = HashSet::new();
     let mut by_owner: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (i, m) in model.meshes.iter().enumerate() {
         let Some(p) = model.products.get(&m.element) else { continue };
-        if is_excluded(&p.class, opts.include_spaces) {
-            if excluded_ids.insert(m.element) {
-                *s.excluded.entry(p.class.clone()).or_default() += 1;
-            }
+        if is_excluded(&p.class) {
             continue;
         }
-        let owner = if opts.keep_parts { m.element } else { owner_of(model, m.element) };
+        let owner = owner_of(model, m.element);
         by_owner.entry(owner).or_default().push(i);
-    }
-
-    let meshed: HashSet<u32> = model.meshes.iter().map(|m| m.element).collect();
-    for (id, p) in &model.products {
-        if p.has_representation
-            && !meshed.contains(id)
-            && !by_owner.contains_key(id)
-            && !is_excluded(&p.class, opts.include_spaces)
-        {
-            *s.without_mesh.entry(p.class.clone()).or_default() += 1;
-        }
     }
 
     let mut storey_index: HashMap<Option<u32>, usize> = HashMap::new();
@@ -196,7 +171,7 @@ mod tests {
     use crate::source::Mesh;
 
     fn product(class: &str, name: &str) -> Product {
-        Product { class: class.into(), name: Some(name.into()), has_representation: true, ..Default::default() }
+        Product { class: class.into(), name: Some(name.into()), ..Default::default() }
     }
 
     fn mesh(element: u32) -> Mesh {
@@ -234,30 +209,18 @@ mod tests {
 
     #[test]
     fn parts_are_grouped_into_the_parent() {
-        let s = build(&model(), SemanticsOptions { include_spaces: false, keep_parts: false });
+        let s = build(&model());
         let names: Vec<_> = s.elements.iter().map(|e| e.record.name.clone().unwrap()).collect();
         assert_eq!(names, ["壁", "柱"]);
         assert_eq!(s.elements[0].meshes, [0, 1]);
         assert_eq!(s.elements[0].record.storey_name.as_deref(), Some("1階"));
         assert_eq!(s.elements[0].record.building_name.as_deref(), Some("建物"));
         assert_eq!(s.elements[1].record.type_name.as_deref(), Some("角柱"));
-        assert_eq!(s.excluded.get("IfcOpeningElement"), Some(&1));
-        assert_eq!(s.without_mesh.get("IfcBuildingElementProxy"), Some(&1));
-        assert!(!s.without_mesh.contains_key("IfcWall"));
-    }
-
-    #[test]
-    fn keep_parts_leaves_parts_as_features() {
-        let s = build(&model(), SemanticsOptions { include_spaces: false, keep_parts: true });
-        assert_eq!(s.elements.len(), 3);
-        // 部品は空間構造に直接所属していないが、親を経由して階が分かる
-        assert!(s.elements.iter().all(|e| e.record.storey_name.is_some()));
-        assert_eq!(s.without_mesh.get("IfcWall"), Some(&1));
     }
 
     #[test]
     fn storeys_are_sorted_by_elevation() {
-        let s = build(&model(), SemanticsOptions { include_spaces: false, keep_parts: false });
+        let s = build(&model());
         let names: Vec<_> = s.storeys.iter().map(|st| st.name.as_str()).collect();
         assert_eq!(names, ["1階", "2階"]);
         assert_eq!(s.elements[0].storey, 0);
@@ -266,12 +229,11 @@ mod tests {
 
     #[test]
     fn exclusions() {
-        assert!(is_excluded("IfcOpeningElement", false));
-        assert!(is_excluded("IfcStructuralCurveMember", false));
-        assert!(is_excluded("IfcWallType", false));
-        assert!(is_excluded("IfcDoorStyle", false));
-        assert!(is_excluded("IfcSpace", false));
-        assert!(!is_excluded("IfcSpace", true));
-        assert!(!is_excluded("IfcWall", false));
+        assert!(is_excluded("IfcOpeningElement"));
+        assert!(is_excluded("IfcStructuralCurveMember"));
+        assert!(is_excluded("IfcWallType"));
+        assert!(is_excluded("IfcDoorStyle"));
+        assert!(is_excluded("IfcSpace"));
+        assert!(!is_excluded("IfcWall"));
     }
 }
