@@ -60,7 +60,7 @@ fn is_spatial(class: &str) -> bool {
 }
 
 /// featureにしない製品か。
-pub fn is_excluded(class: &str) -> bool {
+fn is_excluded(class: &str) -> bool {
     matches!(class, "IfcOpeningElement" | "IfcOpeningStandardCase" | "IfcVirtualElement" | "IfcAnnotation" | "IfcGrid")
         || class.starts_with("IfcStructural")
         || class.ends_with("Type")

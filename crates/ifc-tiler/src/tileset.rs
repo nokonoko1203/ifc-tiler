@@ -73,7 +73,7 @@ fn node(n: &Node, storey: usize, uri: &dyn Fn(usize, &Node) -> Option<String>) -
 }
 
 /// 3D Tilesの`box`（中心と3本の半軸）。つぶれた箱を避けるため半長さは1 cm以上にする。
-pub fn bounding_box(b: &Aabb) -> [f64; 12] {
+fn bounding_box(b: &Aabb) -> [f64; 12] {
     let c = b.center();
     let h = b.size().map(|s| (s / 2.0).max(0.01));
     [c[0], c[1], c[2], h[0], 0.0, 0.0, 0.0, h[1], 0.0, 0.0, 0.0, h[2]]

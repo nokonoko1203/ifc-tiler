@@ -4,23 +4,26 @@
 //! `source`（IFCを読む）→ `semantics`（featureにする部材を決める）→ `georef`（置き方を決める）
 //! → `geodesy`（ECEF→根のENUへ）→ `tiling`（タイルの木）→ `metadata` / `glb` / `tileset`（書き出し）。
 
-pub mod geodesy;
-pub mod georef;
-pub mod glb;
-pub mod metadata;
-pub mod semantics;
-pub mod source;
-pub mod tileset;
-pub mod tiling;
-pub mod units;
+mod geodesy;
+mod georef;
+mod glb;
+mod metadata;
+mod proj;
+mod semantics;
+mod source;
+mod tileset;
+mod tiling;
+mod units;
+
+pub use georef::GeorefOptions;
 
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use crate::geodesy::{Frame, GEOID_NAME, Projector, rotate};
-use crate::georef::{GeorefOptions, Placement, Resolved};
+use crate::geodesy::{Frame, Projector, rotate};
+use crate::georef::Resolved;
 use crate::glb::{TileMesh, TileMetadata};
 use crate::metadata::Table;
 use crate::semantics::Semantics;
@@ -130,7 +133,8 @@ struct Placed {
 /// 局所座標→ECEF→根のENU。根のENUの原点は、全頂点のECEF外接箱の中心。
 fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Placed, Error> {
     let mut warnings = resolved.warnings.clone();
-    let projector = Projector::new(resolved.placement);
+    let (projector, projector_warnings) = Projector::new(&resolved.placement).map_err(Error::Input)?;
+    warnings.extend(projector_warnings);
     let mut positions: Vec<Vec<[f64; 3]>> = vec![Vec::new(); model.meshes.len()];
     let mut ecef_bounds = Aabb::EMPTY;
     for &i in sem.elements.iter().flat_map(|e| &e.meshes) {
@@ -142,23 +146,13 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Pl
             .map_err(outside)?;
         positions[i].iter().for_each(|&p| ecef_bounds.add(p));
     }
-    if projector.geoid_misses() > 0 {
-        let what = match resolved.placement {
-            Placement::Enu(_) => "原点".to_string(),
-            Placement::Grid(_) => format!("{}頂点", projector.geoid_misses()),
-        };
-        warnings.push(format!("{what}がジオイドモデル（{}）の範囲外で、ジオイド高を0とした", GEOID_NAME));
-    }
 
     let frame = Frame::at_ecef(ecef_bounds.center());
     let mut normals: Vec<Vec<[f32; 3]>> = vec![Vec::new(); model.meshes.len()];
     let mut element_bounds = Vec::with_capacity(sem.elements.len());
     for e in &sem.elements {
         // 法線は、部材の中心で求めた局所→根のENUの回転で向きを変える（頂点ごとには投影しない）
-        let local = e.meshes.iter().flat_map(|&i| &model.meshes[i].positions).fold(Aabb::EMPTY, |mut b, &p| {
-            b.add(p);
-            b
-        });
+        let local = Aabb::from_points(e.meshes.iter().flat_map(|&i| &model.meshes[i].positions).copied());
         let r = projector.rotation_at(local.center(), &frame).map_err(outside)?;
         let mut b = Aabb::EMPTY;
         for &i in &e.meshes {

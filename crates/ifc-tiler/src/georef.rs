@@ -3,8 +3,7 @@
 //! IFCから読んだ生の値（`RawGeoref`）と利用者の指定（`GeorefOptions`）から、
 //! 局所座標（IFCの世界座標、m）を地球上に置く方法（`Placement`）を1つ決める。
 //! 優先順位は `--origin` → `--map-conversion` → `IfcMapConversion` → `IfcSite`の経緯度。
-
-use jprect::JPRZone;
+//! CRSは文字列のまま持ち、解釈と変換は`geodesy`（PROJ）で行う。
 
 /// IFCから読んだジオリファレンスの生データ。長さ・角度の値はファイルに書かれた単位のまま。
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -50,28 +49,32 @@ pub struct SiteReference {
 /// 利用者の指定。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GeorefOptions {
-    /// 地図座標のCRS。`IfcMapConversion`のTargetCRSを上書きする。
-    pub crs_epsg: Option<u32>,
+    /// PROJが解釈できるCRS（`EPSG:6677`、`EPSG:6677+6695`など）。地図経路では`IfcMapConversion`の
+    /// TargetCRSを上書きし、ENU経路では原点の緯度・経度・高さのCRSになる。
+    pub crs: Option<String>,
     /// 緯度・経度 [度]・正標高 [m]。
     pub origin: Option<[f64; 3]>,
     /// 局所原点の地図座標（東, 北, 正標高 [m]）と、局所X軸から東への回転（反時計回り）[度]。`--crs`が必要。
     pub map_conversion: Option<[f64; 4]>,
 }
 
+/// ENU経路で`--crs`がないときの、原点の緯度・経度のCRS（WGS84）。
+const DEFAULT_GEOGRAPHIC_CRS: &str = "EPSG:4326";
+
 /// 局所座標（m）を地球上に置く方法。
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Placement {
-    /// 局所座標→平面直角座標（東・北）と正標高。
+    /// 局所座標→地図座標（東・北）と標高。
     Grid(GridPlacement),
-    /// 原点の東・北・上（ENU）。
+    /// 原点の東・北・高さ（ENU）。
     Enu(EnuPlacement),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GridPlacement {
-    pub zone: JPRZone,
-    pub epsg: u32,
-    /// 局所原点の地図座標 [m] と正標高 [m]。
+    /// 地図座標のCRS（投影座標系。高さの基準を含んでもよい）。
+    pub crs: String,
+    /// 局所原点の地図座標 [m] と標高 [m]。
     pub origin: [f64; 3],
     /// 局所X軸から地図の東への回転（反時計回り）[rad]。
     pub rotation: f64,
@@ -91,8 +94,10 @@ impl GridPlacement {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EnuPlacement {
+    /// 原点の緯度・経度・高さのCRS（地理座標系。高さの基準を含んでもよい）。
+    pub crs: String,
     pub latitude_deg: f64,
     pub longitude_deg: f64,
     pub orthometric_height: f64,
@@ -122,22 +127,28 @@ const FAR_FROM_ORIGIN_M: f64 = 1000.0;
 pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Resolved, String> {
     let mut warnings = Vec::new();
     let placement = if let Some([lat, lon, h]) = opts.origin {
-        Placement::Enu(EnuPlacement { latitude_deg: lat, longitude_deg: lon, orthometric_height: h, rotation: 0.0 })
+        Placement::Enu(EnuPlacement {
+            crs: geographic_crs(opts),
+            latitude_deg: lat,
+            longitude_deg: lon,
+            orthometric_height: h,
+            rotation: 0.0,
+        })
     } else if let Some(given) = opts.map_conversion {
         given_map_conversion(raw, given, opts, &mut warnings)?
     } else if let Some(mc) = &raw.map_conversion {
         map_conversion(raw, mc, opts, &mut warnings)?
     } else if let Some((lat, lon)) = site_lat_lon(raw.site.as_ref(), &mut warnings) {
         let elevation = raw.site.as_ref().and_then(|s| s.elevation).unwrap_or(0.0) * raw.length_unit_m;
-        site(raw, lat, lon, elevation)
+        site(raw, lat, lon, elevation, opts)
     } else {
         return Err("ジオリファレンスがない（IfcMapConversion・IfcSiteの経緯度のどちらもない）。\
-                    --origin LAT,LON[,H] で原点を指定すると、その点を中心に東・北・上で配置する"
+                    --origin LAT,LON[,H] で原点を指定すると、その点を中心に東・北・高さで配置する"
             .into());
     };
     if matches!(placement, Placement::Enu(_)) && opts.origin.is_none() && reach_m > FAR_FROM_ORIGIN_M {
         warnings.push(format!(
-            "形状が局所原点から最大{reach_m:.0} m離れている。局所座標が平面直角座標の値なら \
+            "形状が局所原点から最大{reach_m:.0} m離れている。局所座標が地図座標の値なら \
              --map-conversion 0,0 --crs EPSG:xxxx を指定する"
         ));
     }
@@ -154,14 +165,13 @@ fn map_conversion(
         Crs::Projected { name, map_unit_m } => (name.as_deref(), map_unit_m.unwrap_or(raw.length_unit_m)),
         Crs::Missing => (None, raw.length_unit_m),
     };
-    let (zone, epsg) = zone_for(opts.crs_epsg, name, warnings)?;
+    let crs = crs_for(opts.crs.as_deref(), name)?;
     let spec_scale = mc.scale.unwrap_or(1.0) * map_unit_m / raw.length_unit_m;
     let scale = effective_scale(spec_scale, mc.scale, map_unit_m, raw.length_unit_m, warnings);
     let abscissa = mc.x_axis_abscissa.unwrap_or(1.0);
     let ordinate = mc.x_axis_ordinate.unwrap_or(0.0);
     Ok(Placement::Grid(GridPlacement {
-        zone,
-        epsg,
+        crs,
         origin: [mc.eastings * map_unit_m, mc.northings * map_unit_m, mc.orthogonal_height * map_unit_m],
         rotation: ordinate.atan2(abscissa),
         scale,
@@ -176,14 +186,12 @@ fn given_map_conversion(
     opts: &GeorefOptions,
     warnings: &mut Vec<String>,
 ) -> Result<Placement, String> {
-    let epsg = opts.crs_epsg.ok_or("--map-conversion には --crs EPSG:xxxx が必要")?;
-    let (zone, epsg) = zone_for(Some(epsg), None, warnings)?;
+    let crs = opts.crs.clone().ok_or("--map-conversion には --crs EPSG:xxxx が必要")?;
     if raw.map_conversion.is_some() {
         warnings.push("ファイルのIfcMapConversionは使わず、--map-conversionで置いた".into());
     }
     Ok(Placement::Grid(GridPlacement {
-        zone,
-        epsg,
+        crs,
         origin: [e, n, h],
         rotation: rotation_deg.to_radians(),
         scale: 1.0,
@@ -231,11 +239,21 @@ fn site_lat_lon(site: Option<&SiteReference>, warnings: &mut Vec<String>) -> Opt
     Some((lat, lon))
 }
 
-/// IfcSiteの経緯度を原点とする東・北・上。TrueNorthは局所XY平面で北を指すので、
+/// IfcSiteの経緯度を原点とする東・北・高さ。TrueNorthは局所XY平面で北を指すので、
 /// 局所X軸から東への角度は 90° − atan2(ty, tx)。
-fn site(raw: &RawGeoref, lat: f64, lon: f64, elevation: f64) -> Placement {
+fn site(raw: &RawGeoref, lat: f64, lon: f64, elevation: f64, opts: &GeorefOptions) -> Placement {
     let rotation = raw.true_north.map_or(0.0, |[tx, ty]| std::f64::consts::FRAC_PI_2 - ty.atan2(tx));
-    Placement::Enu(EnuPlacement { latitude_deg: lat, longitude_deg: lon, orthometric_height: elevation, rotation })
+    Placement::Enu(EnuPlacement {
+        crs: geographic_crs(opts),
+        latitude_deg: lat,
+        longitude_deg: lon,
+        orthometric_height: elevation,
+        rotation,
+    })
+}
+
+fn geographic_crs(opts: &GeorefOptions) -> String {
+    opts.crs.clone().unwrap_or_else(|| DEFAULT_GEOGRAPHIC_CRS.into())
 }
 
 /// オーサリングツールの既定値とみられるIfcSiteの経緯度 [度]。無関係な複数のファイルで同じ値を確認したもの
@@ -251,35 +269,18 @@ fn known_default(lat: f64, lon: f64) -> Option<&'static str> {
     KNOWN_DEFAULTS.iter().find(|(a, b, _)| (lat - a).abs() < 1e-6 && (lon - b).abs() < 1e-6).map(|&(_, _, w)| w)
 }
 
-/// CRS名（`EPSG:6677`など）から平面直角座標系の系を決める。`--crs`があればそれを優先する。
-fn zone_for(
-    override_epsg: Option<u32>,
-    name: Option<&str>,
-    warnings: &mut Vec<String>,
-) -> Result<(JPRZone, u32), String> {
-    let epsg = match override_epsg {
-        Some(e) => e,
-        None => name
-            .and_then(parse_epsg)
-            .ok_or_else(|| format!("CRSが分からない（{}）。--crs EPSG:xxxx で指定する", name.unwrap_or("名前なし")))?,
-    };
-    if (30161..=30179).contains(&epsg) {
-        return Err(format!("EPSG:{epsg}（旧日本測地系）は対応外"));
+/// 地図座標のCRSを決める。`--crs`があればそれを優先し、なければIFCのCRS名からEPSGコードを読む。
+fn crs_for(override_crs: Option<&str>, name: Option<&str>) -> Result<String, String> {
+    if let Some(c) = override_crs {
+        return Ok(c.to_string());
     }
-    let zone = u16::try_from(epsg).ok().and_then(JPRZone::from_epsg).ok_or_else(|| {
-        format!(
-            "EPSG:{epsg}は対応外（日本の平面直角座標系のみ）。--origin LAT,LON[,H] で原点を指定すると、\
-             その点を中心に東・北・上で配置する"
-        )
-    })?;
-    if (2443..=2461).contains(&epsg) {
-        warnings.push(format!("EPSG:{epsg}（JGD2000）をJGD2011と同じとみなした"));
-    }
-    Ok((zone, epsg))
+    name.and_then(parse_epsg)
+        .map(|code| format!("EPSG:{code}"))
+        .ok_or_else(|| format!("CRSが分からない（{}）。--crs EPSG:xxxx で指定する", name.unwrap_or("名前なし")))
 }
 
 /// `EPSG:6677`、`EPSG: 6677`、`urn:ogc:def:crs:EPSG::6677` などからコードを取り出す。
-pub fn parse_epsg(s: &str) -> Option<u32> {
+fn parse_epsg(s: &str) -> Option<u32> {
     let upper = s.to_ascii_uppercase();
     let rest = &upper[upper.find("EPSG")? + 4..];
     let digits: String = rest.trim_start_matches([':', ' ']).chars().take_while(char::is_ascii_digit).collect();
@@ -312,8 +313,8 @@ mod tests {
     }
 
     fn grid(r: &Resolved) -> GridPlacement {
-        match r.placement {
-            Placement::Grid(g) => g,
+        match &r.placement {
+            Placement::Grid(g) => g.clone(),
             Placement::Enu(_) => panic!("grid expected"),
         }
     }
@@ -331,7 +332,7 @@ mod tests {
         let raw = RawGeoref { map_conversion: Some(mc(0.001, Some(1.0))), ..raw_mm() };
         let r = resolve(&raw, &opts(), 0.0).unwrap();
         let g = grid(&r);
-        assert_eq!(g.zone, JPRZone::Zone9);
+        assert_eq!(g.crs, "EPSG:6677");
         assert!((g.scale - 1.0).abs() < 1e-12);
         assert_eq!(g.to_map([0.0, 0.0, 0.0]), [-5992.9196, -35363.2377, 3.0]);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
@@ -372,25 +373,27 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_and_tokyo_crs_are_rejected() {
+    fn crs_option_overrides_the_file_and_unknown_names_are_rejected() {
         let mut m = mc(0.001, Some(1.0));
-        m.target = Crs::Projected { name: Some("EPSG:32760".into()), map_unit_m: Some(1.0) };
+        m.target =
+            Crs::Projected { name: Some("JGD2011 / Japan Plane Rectangular CS IX".into()), map_unit_m: Some(1.0) };
         let raw = RawGeoref { map_conversion: Some(m), ..raw_mm() };
-        assert!(resolve(&raw, &opts(), 0.0).unwrap_err().contains("--origin"));
-        let o = GeorefOptions { crs_epsg: Some(30169), ..opts() };
-        assert!(resolve(&raw, &o, 0.0).is_err());
-        // --crs でTargetCRSを上書きできる
-        let o = GeorefOptions { crs_epsg: Some(6677), ..opts() };
-        assert!(resolve(&raw, &o, 0.0).is_ok());
+        assert!(resolve(&raw, &opts(), 0.0).unwrap_err().contains("--crs"));
+        let o = GeorefOptions { crs: Some("EPSG:6677+6695".into()), ..opts() };
+        assert_eq!(grid(&resolve(&raw, &o, 0.0).unwrap()).crs, "EPSG:6677+6695");
     }
 
     #[test]
-    fn jgd2000_is_accepted_with_warning() {
-        let o = GeorefOptions { crs_epsg: Some(2451), ..opts() };
-        let raw = RawGeoref { map_conversion: Some(mc(0.001, Some(1.0))), ..raw_mm() };
-        let r = resolve(&raw, &o, 0.0).unwrap();
-        assert_eq!(grid(&r).zone, JPRZone::Zone9);
-        assert!(r.warnings[0].contains("JGD2000"));
+    fn enu_uses_crs_option_or_wgs84() {
+        let raw = RawGeoref {
+            site: Some(SiteReference { latitude_deg: Some(35.0), longitude_deg: Some(139.0), elevation: None }),
+            ..raw_mm()
+        };
+        let Placement::Enu(e) = resolve(&raw, &opts(), 0.0).unwrap().placement else { panic!() };
+        assert_eq!(e.crs, DEFAULT_GEOGRAPHIC_CRS);
+        let o = GeorefOptions { crs: Some("EPSG:6697".into()), ..opts() };
+        let Placement::Enu(e) = resolve(&raw, &o, 0.0).unwrap().placement else { panic!() };
+        assert_eq!(e.crs, "EPSG:6697");
     }
 
     #[test]
@@ -440,11 +443,12 @@ mod tests {
         let raw = RawGeoref { map_conversion: Some(mc(0.001, Some(1.0))), ..raw_mm() };
         let no_crs = GeorefOptions { map_conversion: Some([0.0, 0.0, 0.0, 0.0]), ..opts() };
         assert!(resolve(&raw, &no_crs, 0.0).unwrap_err().contains("--crs"));
-        let o = GeorefOptions { crs_epsg: Some(6677), map_conversion: Some([100.0, 200.0, 3.0, 90.0]), ..opts() };
+        let o =
+            GeorefOptions { crs: Some("EPSG:6677".into()), map_conversion: Some([100.0, 200.0, 3.0, 90.0]), ..opts() };
         let r = resolve(&raw, &o, 0.0).unwrap();
         assert_eq!(r.warnings.len(), 1);
         let g = grid(&r);
-        assert_eq!((g.epsg, g.scale), (6677, 1.0));
+        assert_eq!((g.crs.as_str(), g.scale), ("EPSG:6677", 1.0));
         // 局所X軸を東から90°回すと、局所の(1, 0)は北へ1 m
         let p = g.to_map([1.0, 0.0, 2.0]);
         assert!((p[0] - 100.0).abs() < 1e-9 && (p[1] - 201.0).abs() < 1e-9 && (p[2] - 5.0).abs() < 1e-9, "{p:?}");

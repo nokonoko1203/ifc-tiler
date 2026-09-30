@@ -5,8 +5,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::Parser;
-use ifc_tiler::georef::{GeorefOptions, parse_epsg};
-use ifc_tiler::{Error, convert};
+use ifc_tiler::{Error, GeorefOptions, convert};
 
 /// IFCを部材情報付きの3D Tiles 1.1へ変換する
 #[derive(Parser)]
@@ -17,20 +16,23 @@ struct Cli {
     /// 出力先のディレクトリ（tileset.json、tiles/）
     #[arg(short, long)]
     output: PathBuf,
-    /// 地図座標のCRS（例: EPSG:6677）。IfcMapConversionのTargetCRSを上書きする。--map-conversion では必須
-    #[arg(long, value_parser = epsg)]
-    crs: Option<u32>,
-    /// ファイルのジオリファレンスを使わず、この点を原点とする東・北・上で置く（緯度,経度[,正標高m]）
+    /// CRS（例: EPSG:6677、高さの基準を含めるなら EPSG:6677+6695）。地図座標ではIfcMapConversionの
+    /// TargetCRSを上書きし（--map-conversion では必須）、--origin・IfcSiteでは緯度・経度・高さのCRSになる
+    #[arg(long, value_parser = crs)]
+    crs: Option<String>,
+    /// ファイルのジオリファレンスを使わず、この点を原点とする東・北・高さで置く（緯度,経度[,標高m]）
     #[arg(long, value_parser = origin, allow_hyphen_values = true)]
     origin: Option<[f64; 3]>,
-    /// 局所座標を地図座標で置く（東,北[,正標高[,局所X軸から東への回転°]]、m）。--crsが必要。
+    /// 局所座標を地図座標で置く（東,北[,標高[,局所X軸から東への回転°]]、m）。--crsが必要。
     /// ファイルのジオリファレンスの代わりに使う。局所座標が平面直角座標の値なら 0,0
     #[arg(long, value_parser = map_conversion, allow_hyphen_values = true, conflicts_with = "origin")]
     map_conversion: Option<[f64; 4]>,
 }
 
-fn epsg(s: &str) -> Result<u32, String> {
-    parse_epsg(s).or_else(|| s.parse().ok()).ok_or_else(|| format!("EPSGコードとして読めない: {s}"))
+/// 数字だけならEPSGコードとみなす。それ以外はPROJにそのまま渡す。
+fn crs(s: &str) -> Result<String, String> {
+    let s = s.trim();
+    Ok(if s.parse::<u32>().is_ok() { format!("EPSG:{s}") } else { s.to_string() })
 }
 
 fn origin(s: &str) -> Result<[f64; 3], String> {
@@ -56,7 +58,7 @@ fn map_conversion(s: &str) -> Result<[f64; 4], String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let opts = GeorefOptions { crs_epsg: cli.crs, origin: cli.origin, map_conversion: cli.map_conversion };
+    let opts = GeorefOptions { crs: cli.crs, origin: cli.origin, map_conversion: cli.map_conversion };
     let t0 = Instant::now();
     match convert(&cli.input, &cli.output, &opts) {
         Ok(r) => {

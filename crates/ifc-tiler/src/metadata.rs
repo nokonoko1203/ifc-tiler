@@ -69,7 +69,7 @@ pub struct ElementRecord {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
+enum Kind {
     Uint32,
     /// 整数。INT64はCesiumJSでBigIntとして返り、noData（JSONの数値）と一致しないため使わない。
     Int32,
@@ -78,20 +78,20 @@ pub enum Kind {
     Logical,
 }
 
-pub const NO_DATA_F64: f64 = -9999.0;
-pub const NO_DATA_I32: i32 = i32::MIN;
+const NO_DATA_F64: f64 = -9999.0;
+const NO_DATA_I32: i32 = i32::MIN;
 const LOGICAL_ENUM: &str = "IfcLogical";
 const LOGICAL_NOT_SET: u8 = 255;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Column {
-    pub id: String,
+struct Column {
+    id: String,
     /// 元の名前（`Pset名.プロパティ名`）。IDと同じなら`None`。
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub semantic: Option<&'static str>,
-    pub required: bool,
-    pub kind: Kind,
+    name: Option<String>,
+    description: Option<String>,
+    semantic: Option<&'static str>,
+    required: bool,
+    kind: Kind,
 }
 
 impl Column {
@@ -143,8 +143,8 @@ impl Column {
 /// 全部材の列と値。`rows[i][j]`は部材`i`の列`j`の値。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Table {
-    pub columns: Vec<Column>,
-    pub rows: Vec<Vec<Option<Value>>>,
+    columns: Vec<Column>,
+    rows: Vec<Vec<Option<Value>>>,
 }
 
 const FIXED: [(&str, Option<&str>); 12] = [

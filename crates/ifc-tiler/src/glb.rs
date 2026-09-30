@@ -27,8 +27,8 @@ unsafe extern "C" {
 
 /// インスタンス化する同形メッシュの最小個数と、テンプレートの最小頂点数。
 /// 小さな形状まで分けると、node・accessorのJSONと描画呼び出しが増えて逆効果になる（実データでの計測）。
-pub const INSTANCE_MIN_COPIES: usize = 3;
-pub const INSTANCE_MIN_VERTICES: usize = 200;
+const INSTANCE_MIN_COPIES: usize = 3;
+const INSTANCE_MIN_VERTICES: usize = 200;
 
 /// タイルに入れる部材1つ分のメッシュ（根のENU座標、z上）。
 pub struct TileMesh<'a> {
@@ -84,66 +84,97 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     let mut nodes = Vec::new();
 
     if !groups.is_empty() {
-        // 位置の量子化は、タイル全体で1つの一様な倍率にする（非一様だと法線がゆがむ）
-        let bounds = groups.iter().flat_map(|(_, g)| &g.positions).fold(Aabb::EMPTY, |mut b, p| {
-            b.add(p.map(f64::from));
-            b
-        });
-        let (min, step) = quantization(&bounds);
-        let feature_ids = json!({ "EXT_mesh_features": { "featureIds": [{
-            "featureCount": meta.rows.len(), "attribute": 0, "propertyTable": 0, "label": "element"
-        }] } });
-        let mut primitives = Vec::new();
-        for (translucent, g) in &groups {
-            let mut p = w.quantized(g, min, step);
-            p.insert("material".into(), materials.get(MaterialKey::VertexColor { translucent: *translucent }).into());
-            p.insert("extensions".into(), feature_ids.clone());
-            primitives.push(Value::Object(p));
-        }
-        gltf_meshes.push(json!({ "primitives": primitives }));
-        nodes.push(json!({
-            "mesh": 0,
-            "matrix": [step, 0, 0, 0, 0, step, 0, 0, 0, 0, step, 0, min[0], min[1], min[2], 1],
-        }));
+        let (node, mesh) = direct_node(&mut w, &mut materials, &groups, meta.rows.len(), gltf_meshes.len());
+        nodes.push(node);
+        gltf_meshes.push(mesh);
     }
-
     for inst in &instanced {
-        let m = &meshes[inst.template];
-        let origin = inst.instances[0].1;
-        let g = template_group(m, origin);
-        let bounds = g.positions.iter().fold(Aabb::EMPTY, |mut b, p| {
-            b.add(p.map(f64::from));
-            b
-        });
-        let (offset, step) = quantization(&bounds);
-        let mut p = w.quantized(&g, offset, step);
-        p.insert("material".into(), materials.get(MaterialKey::Color(color_key(m.color))).into());
-        // インスタンスの平行移動（Y上）＝最小点＋テンプレートの量子化の原点。倍率は量子化の刻み
-        let translation: Vec<f32> = inst
-            .instances
-            .iter()
-            .flat_map(|&(_, q)| [q[0] + offset[0], q[2] + offset[1], -q[1] + offset[2]].map(|v| v as f32))
-            .collect();
-        let features: Vec<f32> = inst.instances.iter().map(|&(f, _)| f as f32).collect();
-        let n = inst.instances.len();
-        let mut attributes = Map::new();
-        attributes.insert("TRANSLATION".into(), w.instance_accessor(&translation, n, "VEC3").into());
-        let s = vec![step as f32; 3 * n];
-        attributes.insert("SCALE".into(), w.instance_accessor(&s, n, "VEC3").into());
-        attributes.insert("_FEATURE_ID_0".into(), w.instance_accessor(&features, n, "SCALAR").into());
-        nodes.push(json!({
-            "mesh": gltf_meshes.len(),
-            "extensions": {
-                "EXT_mesh_gpu_instancing": { "attributes": attributes },
-                "EXT_instance_features": { "featureIds": [{
-                    "featureCount": meta.rows.len(), "attribute": 0, "propertyTable": 0, "label": "element"
-                }] }
-            }
-        }));
-        gltf_meshes.push(json!({ "primitives": [Value::Object(p)] }));
+        let (node, mesh) = instanced_node(&mut w, &mut materials, meshes, inst, meta.rows.len(), gltf_meshes.len());
+        nodes.push(node);
+        gltf_meshes.push(mesh);
     }
+    document(w, materials, nodes, gltf_meshes, meta, !instanced.is_empty())
+}
 
-    // メタデータ（非圧縮のままbuffer 0へ）
+/// 部材ID（`_FEATURE_ID_0`）をproperty table 0の行に結びつける`featureIds`。
+fn feature_ids(count: usize) -> Value {
+    json!([{ "featureCount": count, "attribute": 0, "propertyTable": 0, "label": "element" }])
+}
+
+/// 直接置くメッシュのnodeと、そのmesh（`mesh_index`番目）。不透明・半透明のprimitiveを持つ。
+fn direct_node(
+    w: &mut Writer,
+    materials: &mut Materials,
+    groups: &[(bool, Group)],
+    feature_count: usize,
+    mesh_index: usize,
+) -> (Value, Value) {
+    // 位置の量子化は、タイル全体で1つの一様な倍率にする（非一様だと法線がゆがむ）
+    let bounds = Aabb::from_points(groups.iter().flat_map(|(_, g)| &g.positions).map(|p| p.map(f64::from)));
+    let (min, step) = quantization(&bounds);
+    let extensions = json!({ "EXT_mesh_features": { "featureIds": feature_ids(feature_count) } });
+    let mut primitives = Vec::new();
+    for (translucent, g) in groups {
+        let mut p = w.quantized(g, min, step);
+        p.insert("material".into(), materials.get(MaterialKey::VertexColor { translucent: *translucent }).into());
+        p.insert("extensions".into(), extensions.clone());
+        primitives.push(Value::Object(p));
+    }
+    let node = json!({
+        "mesh": mesh_index,
+        "matrix": [step, 0, 0, 0, 0, step, 0, 0, 0, 0, step, 0, min[0], min[1], min[2], 1],
+    });
+    (node, json!({ "primitives": primitives }))
+}
+
+/// インスタンス化したテンプレートのnodeと、そのmesh（`mesh_index`番目）。
+fn instanced_node(
+    w: &mut Writer,
+    materials: &mut Materials,
+    meshes: &[TileMesh],
+    inst: &Instanced,
+    feature_count: usize,
+    mesh_index: usize,
+) -> (Value, Value) {
+    let m = &meshes[inst.template];
+    let origin = inst.instances[0].1;
+    let g = template_group(m, origin);
+    let bounds = Aabb::from_points(g.positions.iter().map(|p| p.map(f64::from)));
+    let (offset, step) = quantization(&bounds);
+    let mut p = w.quantized(&g, offset, step);
+    p.insert("material".into(), materials.get(MaterialKey::Color(color_key(m.color))).into());
+    // インスタンスの平行移動（Y上）＝最小点＋テンプレートの量子化の原点。倍率は量子化の刻み
+    let translation: Vec<f32> = inst
+        .instances
+        .iter()
+        .flat_map(|&(_, q)| [q[0] + offset[0], q[2] + offset[1], -q[1] + offset[2]].map(|v| v as f32))
+        .collect();
+    let features: Vec<f32> = inst.instances.iter().map(|&(f, _)| f as f32).collect();
+    let n = inst.instances.len();
+    let mut attributes = Map::new();
+    attributes.insert("TRANSLATION".into(), w.instance_accessor(&translation, n, "VEC3").into());
+    let s = vec![step as f32; 3 * n];
+    attributes.insert("SCALE".into(), w.instance_accessor(&s, n, "VEC3").into());
+    attributes.insert("_FEATURE_ID_0".into(), w.instance_accessor(&features, n, "SCALAR").into());
+    let node = json!({
+        "mesh": mesh_index,
+        "extensions": {
+            "EXT_mesh_gpu_instancing": { "attributes": attributes },
+            "EXT_instance_features": { "featureIds": feature_ids(feature_count) }
+        }
+    });
+    (node, json!({ "primitives": [Value::Object(p)] }))
+}
+
+/// メタデータ（非圧縮のままbuffer 0へ）を置き、glTFの文書とバイナリをGLBに詰める。
+fn document(
+    mut w: Writer,
+    materials: Materials,
+    nodes: Vec<Value>,
+    gltf_meshes: Vec<Value>,
+    meta: &TileMetadata,
+    has_instances: bool,
+) -> Vec<u8> {
     let (class, property_table) = meta.table.encode(meta.rows, &mut |bytes| w.plain_view(bytes));
     let mut schema = json!({ "id": meta.schema_id, "classes": { "element": class } });
     if meta.table.uses_logical() {
@@ -153,7 +184,7 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     let mut used =
         vec!["EXT_mesh_features", "EXT_structural_metadata", "EXT_meshopt_compression", "KHR_mesh_quantization"];
     let mut required = vec!["EXT_meshopt_compression", "KHR_mesh_quantization"];
-    if !instanced.is_empty() {
+    if has_instances {
         used.extend(["EXT_mesh_gpu_instancing", "EXT_instance_features"]);
         required.push("EXT_mesh_gpu_instancing");
     }

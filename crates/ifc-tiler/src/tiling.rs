@@ -21,6 +21,13 @@ impl Aabb {
         }
     }
 
+    /// 点列の外接箱。空なら`EMPTY`。
+    pub fn from_points(points: impl IntoIterator<Item = [f64; 3]>) -> Self {
+        let mut b = Self::EMPTY;
+        points.into_iter().for_each(|p| b.add(p));
+        b
+    }
+
     pub fn union(mut self, o: &Self) -> Self {
         self.add(o.min);
         self.add(o.max);

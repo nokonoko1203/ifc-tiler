@@ -33,5 +33,22 @@
     "column_referenced_in": "2階",
     "desk_instances": 2,
     "opening_rendered": false
+  },
+  "outside_japan": {
+    "utm_point": {
+      "source": "GeographicLib GeoConvert(1) の例（https://geographiclib.sourceforge.io/C++/doc/GeoConvert.1.html、2026-09-30確認）: 38n 444500 3688500 → 33:20:03.25N 044:24:13.06E",
+      "crs": "EPSG:32638 (WGS 84 / UTM zone 38N)",
+      "easting_m": 444500.0,
+      "northing_m": 3688500.0,
+      "latitude": 33.33423611111111,
+      "longitude": 44.40362777777778,
+      "rounding_m": 0.15
+    },
+    "egm2008_point": {
+      "source": "GeographicLib のテストデータ GeoidHeights.dat（https://sourceforge.net/projects/geographiclib/files/testdata/GeoidHeights.dat.gz、NGAの球面調和関数による計算値、2026-09-30取得）の1行: 47.2612 8.32186 49.22178 47.543601 48.0227",
+      "latitude": 47.2612,
+      "longitude": 8.32186,
+      "geoid_height_egm2008_m": 48.0227
+    }
   }
 }
