@@ -1,9 +1,9 @@
-//! IFCの読み込み。ifc-liteを使うのはこのモジュールだけで、結果は変換器内部の型に詰め替える。
+//! Reading IFC. This is the only module that uses ifc-lite; the results are repacked into the converter's internal types.
 //!
-//! - 形状: ifc-liteのメッシュを、IFCの世界座標（メートル、z上）に戻す。
-//! - 属性: 部材ごとの属性とPset / Qto（型の値を継承し、部材側の値で上書き済み）。
-//! - 関係: 集約（`IfcRelAggregates`）、空間への所属（`IfcRelContainedInSpatialStructure`）、型。
-//! - ジオリファレンスと単位: ifc-liteの抽出関数は(0,0)の`IfcSite`も有効とみなすため、エンティティを直接読む。
+//! - Geometry: ifc-lite meshes are converted back to IFC world coordinates (metres, z up).
+//! - Properties: attributes and Pset / Qto per element (values inherited from the type and overridden by the element's own).
+//! - Relationships: aggregation (`IfcRelAggregates`), spatial containment (`IfcRelContainedInSpatialStructure`) and types.
+//! - Georeferencing and units: ifc-lite's extraction functions treat an `IfcSite` at (0,0) as valid, so entities are read directly.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use crate::georef::{Crs, MapConversion, RawGeoref, SiteReference};
 use crate::metadata::{Logical, Property, Value};
 use crate::units::{Quantity, UnitScales};
 
-/// IFCの製品（`IfcProduct`）1つ。空間要素も含む。
+/// One IFC product (`IfcProduct`), including spatial elements.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Product {
     pub class: String,
@@ -31,12 +31,12 @@ pub struct Product {
     pub object_type: Option<String>,
     pub tag: Option<String>,
     pub predefined_type: Option<String>,
-    /// `IfcBuildingStorey.Elevation` [m]。
+    /// `IfcBuildingStorey.Elevation` [m].
     pub elevation_m: Option<f64>,
     pub properties: Vec<Property>,
 }
 
-/// 1部材の1メッシュ（IFCの世界座標、m）。
+/// One mesh of one element (IFC world coordinates, m).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
     pub element: u32,
@@ -50,11 +50,11 @@ pub struct Mesh {
 pub struct SourceModel {
     pub products: HashMap<u32, Product>,
     pub meshes: Vec<Mesh>,
-    /// 部品→全体（`IfcRelAggregates`）。
+    /// Part → whole (`IfcRelAggregates`).
     pub aggregate_parent: HashMap<u32, u32>,
-    /// 部材→空間要素（`IfcRelContainedInSpatialStructure`）。
+    /// Element → spatial element (`IfcRelContainedInSpatialStructure`).
     pub container: HashMap<u32, u32>,
-    /// 部材→型の名前（`IfcRelDefinesByType`）。
+    /// Element → type name (`IfcRelDefinesByType`).
     pub type_name: HashMap<u32, String>,
     pub units: UnitScales,
     pub georef: RawGeoref,
@@ -124,7 +124,7 @@ fn product(row: EntityRow, length_m: f64) -> (u32, Product) {
     (row.express_id, product)
 }
 
-/// ifc-liteが文字列にした値を、値の型に従って戻す。
+/// Converts values that ifc-lite turned into strings back according to the value type.
 fn parse_value(value: &str, value_type: &str) -> Value {
     let t = value_type.to_ascii_uppercase();
     if t == "IFCBOOLEAN" || t == "IFCLOGICAL" {
@@ -150,7 +150,7 @@ fn parse_value(value: &str, value_type: &str) -> Value {
     }
 }
 
-/// 形状を読み、IFCの世界座標に戻す。
+/// Reads the geometry and converts it back to IFC world coordinates.
 fn meshes(bytes: &[u8]) -> Vec<Mesh> {
     let result = process_geometry_streaming_filtered_with_options(
         bytes,
@@ -166,7 +166,7 @@ fn meshes(bytes: &[u8]) -> Vec<Mesh> {
         .into_iter()
         .filter(|m| !m.indices.is_empty())
         .map(|m| {
-            // positions は MeshData.origin からの相対値で、MeshFrame の座標系にある
+            // positions are relative to MeshData.origin and are in the coordinate system of MeshFrame
             let positions = m
                 .positions
                 .chunks_exact(3)
@@ -185,7 +185,7 @@ fn meshes(bytes: &[u8]) -> Vec<Mesh> {
 
 fn to_world(frame: MeshFrame, p: [f64; 3]) -> [f64; 3] {
     match frame {
-        // フレーム内の点は Rᵀ·(P − t)。P = R·p + t（列優先4×4）
+        // A point in the frame is Rᵀ·(P − t), where P = R·p + t (column-major 4×4)
         MeshFrame::SiteLocal { placement: m } => [
             m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
             m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
@@ -210,7 +210,7 @@ fn rotate_to_world(frame: MeshFrame, n: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// 関係とジオリファレンスのエンティティを1回の走査で読む。
+/// Reads relationship and georeferencing entities in a single scan.
 fn scan_relations_and_georef(bytes: &[u8], decoder: &mut EntityDecoder, model: &mut SourceModel) {
     let mut scanner = EntityScanner::new(bytes);
     let mut type_of: Vec<(Vec<u32>, u32)> = Vec::new();
@@ -295,7 +295,7 @@ fn read_crs(id: Option<u32>, decoder: &mut EntityDecoder) -> Crs {
     Crs::Projected { name, map_unit_m }
 }
 
-/// `IfcCompoundPlaneAngleMeasure`（度・分・秒・百万分の1秒。各要素は同じ符号）→ 度。
+/// `IfcCompoundPlaneAngleMeasure` (degrees, minutes, seconds, millionths of a second; all with the same sign) → degrees.
 fn compound_angle(v: &AttributeValue) -> Option<f64> {
     let parts: Vec<f64> = v.as_list()?.iter().filter_map(AttributeValue::as_float).collect();
     let [d, rest @ ..] = parts.as_slice() else { return None };

@@ -1,8 +1,8 @@
-//! 自作IFC（testdata/handmade）を変換し、出力を読み戻して確かめる。
+//! Converts the handmade IFCs (testdata/handmade), reads the output back and checks it.
 //!
-//! 出力（量子化＋meshopt）を復号し、既知点の位置と部材の属性を見る。
-//! 期待値は testdata/handmade/expected.json（国土地理院の計算結果と、日本以外はGeographicLibの計算例）。
-//! 座標変換はPROJが行い、グリッド（ジオイドなど）はcdn.proj.orgから取得する（初回はネットワークが要る）。
+//! The output (quantized + meshopt) is decoded, and the positions of known points and the element properties are checked.
+//! Expected values are in testdata/handmade/expected.json (GSI calculation results, and GeographicLib examples outside Japan).
+//! PROJ does the coordinate conversion and downloads grids (geoids etc.) from cdn.proj.org (the first run needs network access).
 
 mod common;
 
@@ -14,9 +14,9 @@ use ifc_tiler::convert;
 use serde_json::Value;
 
 const CUBE: &str = "既知点立方体";
-/// JGD2011 / 平面直角座標系IX系 + JGD2011の標高。
+/// JGD2011 / Japan Plane Rectangular CS IX + JGD2011 height.
 const PLANE_IX_WITH_HEIGHT: &str = "EPSG:10170";
-/// JGD2011の経緯度 + JGD2011の標高。
+/// JGD2011 latitude/longitude + JGD2011 height.
 const JGD2011_WITH_HEIGHT: &str = "EPSG:6697";
 
 fn with_crs(crs: &str) -> GeorefOptions {
@@ -27,7 +27,7 @@ fn expected() -> Value {
     serde_json::from_slice(&std::fs::read(root().join("testdata/handmade/expected.json")).unwrap()).unwrap()
 }
 
-/// WGS84の(緯度, 経度, 楕円体高) → ECEF。
+/// WGS84 (latitude, longitude, ellipsoidal height) → ECEF.
 fn ecef(lat_deg: f64, lon_deg: f64, h: f64) -> [f64; 3] {
     let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
     let (a, f) = (6_378_137.0, 1.0 / 298.257_223_563);
@@ -36,7 +36,7 @@ fn ecef(lat_deg: f64, lon_deg: f64, h: f64) -> [f64; 3] {
     [(n + h) * lat.cos() * lon.cos(), (n + h) * lat.cos() * lon.sin(), (n * (1.0 - e2) + h) * lat.sin()]
 }
 
-/// ECEF → WGS84の楕円体高。緯度を反復で求める。
+/// ECEF → WGS84 ellipsoidal height. The latitude is found iteratively.
 fn ellipsoidal_height(p: [f64; 3]) -> f64 {
     let (a, f) = (6_378_137.0, 1.0 / 298.257_223_563);
     let e2 = f * (2.0 - f);
@@ -52,7 +52,10 @@ fn ellipsoidal_height(p: [f64; 3]) -> f64 {
 }
 
 fn cube(features: &[Feature]) -> &Feature {
-    features.iter().find(|f| f.props.get("name").and_then(Value::as_str) == Some(CUBE)).expect("既知点立方体がある")
+    features
+        .iter()
+        .find(|f| f.props.get("name").and_then(Value::as_str) == Some(CUBE))
+        .expect("the known-point cube exists")
 }
 
 fn nearest(features: &[Feature], target: [f64; 3]) -> f64 {
@@ -65,11 +68,11 @@ fn nearest(features: &[Feature], target: [f64; 3]) -> f64 {
 
 fn run(file: &str, name: &str, opts: &GeorefOptions) -> PathBuf {
     let out = out_dir(&format!("handmade/{name}"));
-    convert(&root().join("testdata/handmade").join(file), &out, opts).expect("変換できる");
+    convert(&root().join("testdata/handmade").join(file), &out, opts).expect("can be converted");
     out
 }
 
-/// 国土地理院の既知点（楕円体高 = 標高3 m + ジオイド高）のECEF。
+/// ECEF of the GSI known point (ellipsoidal height = elevation 3 m + geoid height).
 fn known_point(geoid_key: &str) -> [f64; 3] {
     let exp = expected();
     let k = &exp["known_point"];
@@ -77,7 +80,7 @@ fn known_point(geoid_key: &str) -> [f64; 3] {
     ecef(k["latitude"].as_f64().unwrap(), k["longitude"].as_f64().unwrap(), h)
 }
 
-/// 立方体の頂点のうち既知点に最も近いもの（局所原点の角）までの距離 [m]。
+/// Distance [m] to the cube vertex closest to the known point (the corner at the local origin).
 fn cube_error(features: &[Feature], geoid_key: &str) -> f64 {
     nearest(features, known_point(geoid_key))
 }
@@ -95,17 +98,17 @@ fn site_lat_lon_known_point() {
     assert!(cube_error(&f, "geoid_height_jpgeo2024_m") < 0.01);
 }
 
-/// 局所座標が平面直角座標の値のIFCを、IfcSiteの経緯度を原点とするENUで置くと大きくずれ、警告が出る。
+/// Placing an IFC whose local coordinates are plane rectangular coordinates with ENU around the latitude/longitude of IfcSite is far off and produces a warning.
 #[test]
 fn plan_coordinates_in_enu_are_warned() {
     let out = out_dir("handmade/plateau_enu");
     let r =
         convert(&root().join("testdata/handmade/ifc2x3_plateau_origin.ifc"), &out, &GeorefOptions::default()).unwrap();
-    assert!(r.warnings.iter().any(|w| w.contains("離れている")), "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|w| w.contains("from the local origin")), "{:?}", r.warnings);
     assert!(cube_error(&read_tileset(&out), "geoid_height_jpgeo2024_m") > 100.0);
 }
 
-/// 局所座標が平面直角座標の値のIFCを、`--map-conversion 0,0 --crs`だけで置ける。
+/// An IFC whose local coordinates are plane rectangular coordinates can be placed with just `--map-conversion 0,0 --crs`.
 #[test]
 fn map_conversion_option_places_plan_coordinates() {
     let mut opts = GeorefOptions { map_conversion: Some([0.0, 0.0, 0.0, 0.0]), ..with_crs(PLANE_IX_WITH_HEIGHT) };
@@ -118,7 +121,7 @@ fn map_conversion_option_places_plan_coordinates() {
     assert!(matches!(e, ifc_tiler::Error::Input(_)), "{e}");
 }
 
-/// 日本以外: UTM 38Nの地図座標に置いた立方体の水平位置が、GeographicLibの計算例と一致する。
+/// Outside Japan: the horizontal position of a cube placed at UTM 38N map coordinates matches the GeographicLib example.
 #[test]
 fn utm_map_conversion_matches_geographiclib() {
     let exp = expected();
@@ -126,7 +129,7 @@ fn utm_map_conversion_matches_geographiclib() {
     let (e, n) = (u["easting_m"].as_f64().unwrap(), u["northing_m"].as_f64().unwrap());
     let opts = GeorefOptions { map_conversion: Some([e, n, 0.0, 0.0]), ..with_crs("EPSG:32638") };
     let f = read_tileset(&run("ifc4_map_conversion.ifc", "utm38n", &opts));
-    // 高さはEGM2008で決まるので、各頂点の楕円体高で既知点を作り、水平の距離だけを見る
+    // The height is determined by EGM2008, so build the known point from each vertex's ellipsoidal height and only look at the horizontal distance
     let (lat, lon) = (u["latitude"].as_f64().unwrap(), u["longitude"].as_f64().unwrap());
     let err = cube(&f)
         .ecef
@@ -140,7 +143,7 @@ fn utm_map_conversion_matches_geographiclib() {
     assert!(err < u["rounding_m"].as_f64().unwrap(), "{err}");
 }
 
-/// 日本以外: 高さの基準がなければEGM2008の標高とみなし、ジオイド高がGeographicLibのテストデータと一致する。
+/// Outside Japan: without a height reference, heights are treated as EGM2008 heights, and the geoid height matches GeographicLib's test data.
 #[test]
 fn egm2008_height_matches_geographiclib() {
     let exp = expected();
@@ -150,12 +153,12 @@ fn egm2008_height_matches_geographiclib() {
     let out = out_dir("handmade/egm2008");
     let r = convert(&root().join("testdata/handmade/ifc2x3_site_latlon.ifc"), &out, &opts).unwrap();
     assert!(r.warnings.iter().any(|w| w.contains("EGM2008")), "{:?}", r.warnings);
-    // PROJはEGM2008の2.5′格子を補間する（GeographicLibによる最大誤差0.135 m、RMS 3 mm）
+    // PROJ interpolates the 2.5′ EGM2008 grid (maximum error 0.135 m and RMS 3 mm according to GeographicLib)
     let err = nearest(&read_tileset(&out), ecef(lat, lon, 3.0 + g["geoid_height_egm2008_m"].as_f64().unwrap()));
     assert!(err < 0.05, "{err}");
 }
 
-/// `--map-conversion`は`--origin`と同時に指定できない（終了コード2）。
+/// `--map-conversion` cannot be combined with `--origin` (exit code 2).
 #[test]
 fn map_conversion_conflicts_with_origin() {
     let input = root().join("testdata/handmade/ifc2x3_plateau_origin.ifc");
@@ -183,7 +186,7 @@ fn element_semantics() {
     let get = |f: &Feature, k: &str| f.props.get(k).cloned().unwrap_or(Value::Null);
 
     let wall = by_name("外壁A");
-    // 型のPsetを継承し（IsExternal、Reference）、部材側で上書きした値（FireRating）が勝つ
+    // Psets of the type are inherited (IsExternal, Reference), and a value overridden on the element (FireRating) wins
     assert_eq!(get(wall, "Pset_WallCommon__IsExternal"), "TRUE");
     assert_eq!(get(wall, "Pset_WallCommon__Reference"), "WT-1");
     assert_eq!(get(wall, "Pset_WallCommon__FireRating"), "OCC-120");
@@ -194,19 +197,19 @@ fn element_semantics() {
     assert_eq!(get(wall, "tag"), "W-01");
     assert_eq!(get(wall, "predefinedType"), "STANDARD");
 
-    // 日本語のPset名はハッシュのIDになり、元の名前はclassの`name`に残る
+    // A Japanese Pset name becomes a hashed ID, and the original name stays in the class's `name`
     let concrete = wall.props.iter().find(|(_, v)| v.as_f64() == Some(24.0)).map(|(k, _)| k.clone()).unwrap();
     assert!(concrete.starts_with("p_"), "{concrete}");
 
-    // 所属は包含（1階）で決まり、参照（2階）ではない
+    // Membership is decided by containment (1F), not by reference (2F)
     assert_eq!(get(by_name("通し柱"), "storeyName"), "1階");
 
-    // 開口と室はfeatureにならない。机2台はそれぞれfeatureになる
+    // Openings and spaces do not become features. Each of the two desks becomes a feature
     let classes: Vec<&str> = features.iter().filter_map(|f| f.props["ifcClass"].as_str()).collect();
     assert!(!classes.contains(&"IfcOpeningElement") && !classes.contains(&"IfcSpace"), "{classes:?}");
     assert_eq!(classes.iter().filter(|c| **c == "IfcFurniture").count(), 2);
     assert_eq!(get(by_name("机2"), "storeyName"), "2階");
-    // 机は同じ形の複製（IfcMappedItem）だが、別の位置にある
+    // The desks are copies of the same shape (IfcMappedItem) but at different positions
     let (a, b) = (&by_name("机1").ecef, &by_name("机2").ecef);
     assert!(!a.is_empty() && !b.is_empty() && (a[0][0] - b[0][0]).abs() + (a[0][1] - b[0][1]).abs() > 0.1);
 }

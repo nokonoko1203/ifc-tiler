@@ -1,8 +1,8 @@
-//! IFCを部材情報付きの3D Tiles 1.1へ変換する。
+//! Converts IFC into 3D Tiles 1.1 with element metadata.
 //!
-//! 処理の流れ（`convert`）:
-//! `source`（IFCを読む）→ `semantics`（featureにする部材を決める）→ `georef`（置き方を決める）
-//! → `geodesy`（ECEF→根のENUへ）→ `tiling`（タイルの木）→ `metadata` / `glb` / `tileset`（書き出し）。
+//! Pipeline (`convert`):
+//! `source` (read the IFC) → `semantics` (decide which elements become features) → `georef` (decide the placement)
+//! → `geodesy` (ECEF → root ENU) → `tiling` (tile tree) → `metadata` / `glb` / `tileset` (output).
 
 mod geodesy;
 mod georef;
@@ -30,27 +30,27 @@ use crate::semantics::Semantics;
 use crate::source::SourceModel;
 use crate::tiling::{Aabb, Node};
 
-/// 1タイルの部材数の上限。
+/// Maximum number of elements per tile.
 const MAX_FEATURES: usize = 200;
 
-/// 変換の結果。
+/// Result of a conversion.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Summary {
     pub elements: usize,
     pub storeys: usize,
     pub tiles: usize,
-    /// GLBの合計サイズ [byte]。
+    /// Total size of the GLB files [bytes].
     pub bytes: usize,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
 pub enum Error {
-    /// 入力・設定の誤り（終了コード2）。
+    /// Invalid input or settings (exit code 2).
     Input(String),
-    /// 変換できる部材がない（終了コード3）。
+    /// No convertible elements (exit code 3).
     NoElements(String),
-    /// 書き出しの失敗など（終了コード1）。
+    /// Output failures and the like (exit code 1).
     Io(String),
 }
 
@@ -70,18 +70,18 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
 
 fn outside([e, n, _]: [f64; 3]) -> Error {
     Error::Input(format!(
-        "地図座標 (E={e:.1}, N={n:.1}) が平面直角座標系の定義域外。--crs やジオリファレンスを確かめる"
+        "map coordinates (E={e:.1}, N={n:.1}) are outside the domain of the CRS; check --crs and the georeferencing"
     ))
 }
 
-/// `input`のIFCを変換し、`output`にtileset.jsonとtiles/*.glbを書く。
+/// Converts the IFC at `input` and writes tileset.json and tiles/*.glb to `output`.
 pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summary, Error> {
     let bytes = fs::read(input).map_err(|e| Error::Input(format!("{}: {e}", input.display())))?;
     let model = source::read(&bytes);
 
     let sem = semantics::build(&model);
     if sem.elements.is_empty() {
-        return Err(Error::NoElements(format!("{}: 形状を持つ部材がない", input.display())));
+        return Err(Error::NoElements(format!("{}: no elements with geometry", input.display())));
     }
     let reach = sem
         .elements
@@ -109,7 +109,8 @@ pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summ
     let uri = |s: usize, n: &Node| uris.get(&(s, n.path.clone())).cloned();
     let ts = tileset::build(&placed.frame, &bounds, &trees, &uri, &sem.storeys, &table);
     let ts_path = output.join("tileset.json");
-    fs::write(&ts_path, serde_json::to_vec_pretty(&ts).expect("tilesetのJSON化")).map_err(io(&ts_path))?;
+    fs::write(&ts_path, serde_json::to_vec_pretty(&ts).expect("serializing the tileset to JSON"))
+        .map_err(io(&ts_path))?;
     Ok(Summary {
         elements: sem.elements.len(),
         storeys: sem.storeys.len(),
@@ -119,18 +120,18 @@ pub fn convert(input: &Path, output: &Path, opts: &GeorefOptions) -> Result<Summ
     })
 }
 
-/// 地球上に置いた形状。頂点と法線は根のENU（`frame`）の座標で、`SourceModel::meshes`と同じ番号。
-/// featureにならないメッシュは空。
+/// Geometry placed on the globe. Vertices and normals are in the root ENU (`frame`) coordinates, indexed like `SourceModel::meshes`.
+/// Meshes that do not become features are empty.
 struct Placed {
     frame: Frame,
     positions: Vec<Vec<[f64; 3]>>,
     normals: Vec<Vec<[f32; 3]>>,
-    /// `Semantics::elements`と同じ番号の、根のENUでの外接箱。
+    /// Bounding boxes in the root ENU, indexed like `Semantics::elements`.
     element_bounds: Vec<Aabb>,
     warnings: Vec<String>,
 }
 
-/// 局所座標→ECEF→根のENU。根のENUの原点は、全頂点のECEF外接箱の中心。
+/// Local coordinates → ECEF → root ENU. The root ENU origin is the center of the ECEF bounding box of all vertices.
 fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Placed, Error> {
     let mut warnings = resolved.warnings.clone();
     let (projector, projector_warnings) = Projector::new(&resolved.placement).map_err(Error::Input)?;
@@ -151,7 +152,7 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Pl
     let mut normals: Vec<Vec<[f32; 3]>> = vec![Vec::new(); model.meshes.len()];
     let mut element_bounds = Vec::with_capacity(sem.elements.len());
     for e in &sem.elements {
-        // 法線は、部材の中心で求めた局所→根のENUの回転で向きを変える（頂点ごとには投影しない）
+        // Normals are rotated by the local → root ENU rotation computed at the element's center (not projected per vertex)
         let local = Aabb::from_points(e.meshes.iter().flat_map(|&i| &model.meshes[i].positions).copied());
         let r = projector.rotation_at(local.center(), &frame).map_err(outside)?;
         let mut b = Aabb::EMPTY;
@@ -168,10 +169,10 @@ fn place(model: &SourceModel, sem: &Semantics, resolved: &Resolved) -> Result<Pl
     Ok(Placed { frame, positions, normals, element_bounds, warnings })
 }
 
-/// (階の番号, 四分木のパス) → contentのURI。
+/// (storey index, quadtree path) → content URI.
 type TileUris = HashMap<(usize, String), String>;
 
-/// contentを持つノードごとにGLBを書く。返り値は（(階, パス)→URI、GLBの合計サイズ）。
+/// Writes a GLB for every node with content. Returns ((storey, path) → URI, total GLB size).
 fn write_tiles(
     output: &Path,
     trees: &[Node],
@@ -192,14 +193,14 @@ fn write_tiles(
                 continue;
             }
             let name = format!("{s:03}_{}", n.path);
-            // タイル内の部材番号（property tableの行）は、ノードの部材の並び順
+            // The element index within a tile (row of the property table) follows the order of the node's elements
             let meshes: Vec<TileMesh> = n
                 .elements
                 .iter()
                 .enumerate()
                 .flat_map(|(f, &ei)| sem.elements[ei].meshes.iter().map(move |&mi| (f, mi)))
                 .map(|(f, mi)| TileMesh {
-                    feature: u32::try_from(f).expect("1タイルの部材数がu32に収まる"),
+                    feature: u32::try_from(f).expect("the number of elements in a tile fits in u32"),
                     color: model.meshes[mi].color,
                     positions: &placed.positions[mi],
                     normals: &placed.normals[mi],

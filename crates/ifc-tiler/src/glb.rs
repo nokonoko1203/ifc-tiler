@@ -1,10 +1,10 @@
-//! 1タイル分のGLB（glTF 2.0バイナリ）を作る。
+//! Builds the GLB (binary glTF 2.0) of one tile.
 //!
-//! 直接置くメッシュは、不透明・半透明の2つのprimitiveにまとめ、色を`COLOR_0`、部材を`_FEATURE_ID_0`で
-//! 区別する。タイル内で同じ形（平行移動だけ違う）のメッシュが多ければ、テンプレート1つと
-//! `EXT_mesh_gpu_instancing`のインスタンスにする。同じ頂点を溶接し、位置をUINT16に、法線を
-//! INT8に量子化し（法線はOCTAHEDRALフィルタ）、`EXT_meshopt_compression`で符号化する
-//! （量子化の刻みは最大タイルで0.6 mm程度）。
+//! Directly placed meshes are merged into two primitives, opaque and translucent, with colors in `COLOR_0` and elements
+//! distinguished by `_FEATURE_ID_0`. If a tile has many meshes of the same shape (differing only by translation), they become one template and
+//! `EXT_mesh_gpu_instancing` instances. Identical vertices are welded, positions are quantized to UINT16 and normals to
+//! INT8 (normals use the OCTAHEDRAL filter), and everything is encoded with `EXT_meshopt_compression`
+//! (the quantization step is about 0.6 mm for the largest tile).
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -20,19 +20,19 @@ use serde_json::{Map, Value, json};
 use crate::metadata::{LOGICAL_ENUM_ID, Table, logical_enum};
 use crate::tiling::Aabb;
 
-// meshopt crateはフィルタの符号化を公開していないため、同梱のmeshoptimizer（vertexfilter.cpp）を直接呼ぶ
+// The meshopt crate does not expose filter encoding, so the bundled meshoptimizer (vertexfilter.cpp) is called directly
 unsafe extern "C" {
     fn meshopt_encodeFilterOct(destination: *mut c_void, count: usize, stride: usize, bits: i32, data: *const f32);
 }
 
-/// インスタンス化する同形メッシュの最小個数と、テンプレートの最小頂点数。
-/// 小さな形状まで分けると、node・accessorのJSONと描画呼び出しが増えて逆効果になる（実データでの計測）。
+/// Minimum number of identical meshes to instance, and minimum vertex count of the template.
+/// Splitting off even small shapes increases node/accessor JSON and draw calls, which backfires (measured on real data).
 const INSTANCE_MIN_COPIES: usize = 3;
 const INSTANCE_MIN_VERTICES: usize = 200;
 
-/// タイルに入れる部材1つ分のメッシュ（根のENU座標、z上）。
+/// The mesh of one element in a tile (root ENU coordinates, z up).
 pub struct TileMesh<'a> {
-    /// タイル内の部材番号（property tableの行）。
+    /// Element index within the tile (row of the property table).
     pub feature: u32,
     pub color: [f32; 4],
     pub positions: &'a [[f64; 3]],
@@ -40,7 +40,7 @@ pub struct TileMesh<'a> {
     pub indices: &'a [u32],
 }
 
-/// メタデータの参照（`Table::encode`に渡す行番号とスキーマID）。
+/// A reference to the metadata (the row numbers passed to `Table::encode` and the schema ID).
 pub struct TileMetadata<'a> {
     pub table: &'a Table,
     pub rows: &'a [usize],
@@ -55,10 +55,10 @@ const BYTE: u32 = 5120;
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 
-/// 8ビットに丸めたαがこれ以下なら半透明（`BLEND`）とする（0.99 × 255）。
+/// If alpha rounded to 8 bits is at or below this, the mesh is translucent (`BLEND`) (0.99 × 255).
 const OPAQUE_MIN_ALPHA: u8 = 253;
 
-/// primitive 1つ分の頂点（glTFのY上座標）。
+/// The vertices of one primitive (glTF Y-up coordinates).
 #[derive(Default)]
 struct Group {
     positions: Vec<[f32; 3]>,
@@ -68,13 +68,13 @@ struct Group {
     indices: Vec<u32>,
 }
 
-/// テンプレート1つと、そのインスタンス（部材番号、ENUでの最小点）。
+/// One template and its instances (element index, minimum point in ENU).
 struct Instanced {
     template: usize,
     instances: Vec<(u32, [f64; 3])>,
 }
 
-/// GLBのバイト列を作る。
+/// Builds the bytes of a GLB.
 pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     let (instanced, direct) = find_instances(meshes);
     let groups = group_by_opacity(meshes, &direct);
@@ -96,12 +96,12 @@ pub fn write(meshes: &[TileMesh], meta: &TileMetadata) -> Vec<u8> {
     document(w, materials, nodes, gltf_meshes, meta, !instanced.is_empty())
 }
 
-/// 部材ID（`_FEATURE_ID_0`）をproperty table 0の行に結びつける`featureIds`。
+/// The `featureIds` that tie element IDs (`_FEATURE_ID_0`) to the rows of property table 0.
 fn feature_ids(count: usize) -> Value {
     json!([{ "featureCount": count, "attribute": 0, "propertyTable": 0, "label": "element" }])
 }
 
-/// 直接置くメッシュのnodeと、そのmesh（`mesh_index`番目）。不透明・半透明のprimitiveを持つ。
+/// The node of the directly placed meshes and its mesh (the `mesh_index`-th). It has opaque and translucent primitives.
 fn direct_node(
     w: &mut Writer,
     materials: &mut Materials,
@@ -109,7 +109,7 @@ fn direct_node(
     feature_count: usize,
     mesh_index: usize,
 ) -> (Value, Value) {
-    // 位置の量子化は、タイル全体で1つの一様な倍率にする（非一様だと法線がゆがむ）
+    // Position quantization uses one uniform scale for the whole tile (a non-uniform one would distort normals)
     let bounds = Aabb::from_points(groups.iter().flat_map(|(_, g)| &g.positions).map(|p| p.map(f64::from)));
     let (min, step) = quantization(&bounds);
     let extensions = json!({ "EXT_mesh_features": { "featureIds": feature_ids(feature_count) } });
@@ -127,7 +127,7 @@ fn direct_node(
     (node, json!({ "primitives": primitives }))
 }
 
-/// インスタンス化したテンプレートのnodeと、そのmesh（`mesh_index`番目）。
+/// The node of an instanced template and its mesh (the `mesh_index`-th).
 fn instanced_node(
     w: &mut Writer,
     materials: &mut Materials,
@@ -143,7 +143,7 @@ fn instanced_node(
     let (offset, step) = quantization(&bounds);
     let mut p = w.quantized(&g, offset, step);
     p.insert("material".into(), materials.get(MaterialKey::Color(color_key(m.color))).into());
-    // インスタンスの平行移動（Y上）＝最小点＋テンプレートの量子化の原点。倍率は量子化の刻み
+    // Instance translation (Y-up) = minimum point + quantization origin of the template. The scale is the quantization step
     let translation: Vec<f32> = inst
         .instances
         .iter()
@@ -166,7 +166,7 @@ fn instanced_node(
     (node, json!({ "primitives": [Value::Object(p)] }))
 }
 
-/// メタデータ（非圧縮のままbuffer 0へ）を置き、glTFの文書とバイナリをGLBに詰める。
+/// Places the metadata (uncompressed, in buffer 0) and packs the glTF document and binary into a GLB.
 fn document(
     mut w: Writer,
     materials: Materials,
@@ -209,7 +209,7 @@ fn document(
     pack(&gltf, &w.bin)
 }
 
-/// 外接箱から、一様な量子化の原点と刻み（最大辺 ÷ 65535）を決める。
+/// Decides the origin and step (longest side ÷ 65535) of a uniform quantization from a bounding box.
 fn quantization(bounds: &Aabb) -> ([f64; 3], f64) {
     let extent = bounds.size().into_iter().fold(0.001, f64::max);
     (bounds.min, extent / 65535.0)
@@ -219,7 +219,7 @@ fn color_key(c: [f32; 4]) -> [u8; 4] {
     c.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// 同じ形か比べるための量子化（最小点からの相対座標を1 mm、法線を0.01の刻みに丸める）。
+/// Quantization used to compare shapes (coordinates relative to the minimum point rounded to 1 mm, normals to steps of 0.01).
 struct Shape {
     color: [u8; 4],
     min: [f64; 3],
@@ -256,10 +256,10 @@ impl Shape {
     }
 }
 
-/// インスタンス化するメッシュの組と、直接置くメッシュの番号に分ける。
+/// Splits the meshes into groups to instance and the indices of the meshes to place directly.
 fn find_instances(meshes: &[TileMesh]) -> (Vec<Instanced>, Vec<usize>) {
     let shapes: Vec<Shape> = meshes.iter().map(Shape::of).collect();
-    // ハッシュで候補を集め、量子化した値を比べて同値類に分ける（出現順を保つ）
+    // Gather candidates by hash, then compare the quantized values to split them into equivalence classes (keeping the order of appearance)
     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut classes: Vec<Vec<usize>> = Vec::new();
     for (i, s) in shapes.iter().enumerate() {
@@ -290,7 +290,7 @@ fn find_instances(meshes: &[TileMesh]) -> (Vec<Instanced>, Vec<usize>) {
     (instanced, direct)
 }
 
-/// 直接置くメッシュを、不透明・半透明の2つにまとめる（この順）。
+/// Merges the directly placed meshes into two groups, opaque and translucent (in this order).
 fn group_by_opacity(meshes: &[TileMesh], direct: &[usize]) -> Vec<(bool, Group)> {
     let mut opaque = Group::default();
     let mut translucent = Group::default();
@@ -298,8 +298,8 @@ fn group_by_opacity(meshes: &[TileMesh], direct: &[usize]) -> Vec<(bool, Group)>
         let m = &meshes[i];
         let color = color_key(m.color);
         let g = if color[3] < OPAQUE_MIN_ALPHA { &mut translucent } else { &mut opaque };
-        let base = u32::try_from(g.positions.len()).expect("1タイルの頂点数がu32に収まる");
-        // z上（ENU）→ glTFのY上: (x, y, z) → (x, z, −y)
+        let base = u32::try_from(g.positions.len()).expect("the vertex count of a tile fits in u32");
+        // z-up (ENU) → glTF Y-up: (x, y, z) → (x, z, −y)
         g.positions.extend(m.positions.iter().map(|p| [p[0] as f32, p[2] as f32, -p[1] as f32]));
         g.normals.extend(m.normals.iter().map(|n| normalize([n[0], n[2], -n[1]])));
         g.colors.extend(std::iter::repeat_n(color, m.positions.len()));
@@ -309,7 +309,7 @@ fn group_by_opacity(meshes: &[TileMesh], direct: &[usize]) -> Vec<(bool, Group)>
     [(false, opaque), (true, translucent)].into_iter().filter(|(_, g)| !g.positions.is_empty()).collect()
 }
 
-/// テンプレートの頂点（`origin`を原点にしたY上座標）。色は材料で与えるため持たない。
+/// The vertices of a template (Y-up coordinates with `origin` as the origin). Color comes from the material, so it is not stored.
 fn template_group(m: &TileMesh, origin: [f64; 3]) -> Group {
     let rel = |p: &[f64; 3]| [(p[0] - origin[0]) as f32, (p[2] - origin[2]) as f32, (origin[1] - p[1]) as f32];
     Group {
@@ -326,7 +326,7 @@ fn normalize(n: [f32; 3]) -> [f32; 3] {
     if l > 1e-12 { n.map(|v| v / l) } else { [0.0, 1.0, 0.0] }
 }
 
-/// 材料の種類。直接置くメッシュは係数が白で色は`COLOR_0`、テンプレートは係数がその色。
+/// Kind of material. Directly placed meshes have a white factor with the color in `COLOR_0`; templates have the color as the factor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MaterialKey {
     VertexColor { translucent: bool },
@@ -371,7 +371,7 @@ struct QuantVertex {
     f: f32,
 }
 
-/// 同一頂点の溶接と、頂点キャッシュ・頂点フェッチの最適化。
+/// Welding of identical vertices, and vertex cache and vertex fetch optimization.
 fn weld<T: Copy + Default>(vertices: &[T], indices: &[u32]) -> (Vec<T>, Vec<u32>) {
     let (count, remap) = generate_vertex_remap(vertices, Some(indices));
     let mut idx = remap_index_buffer(Some(indices), count, &remap);
@@ -381,14 +381,14 @@ fn weld<T: Copy + Default>(vertices: &[T], indices: &[u32]) -> (Vec<T>, Vec<u32>
     (v, idx)
 }
 
-/// INT8の法線（xyzと0）を、OCTAHEDRALフィルタの8ビット表現にする。
+/// Converts INT8 normals (xyz and 0) to the 8-bit representation of the OCTAHEDRAL filter.
 fn encode_oct(normals: &[[i8; 4]]) -> Vec<[i8; 4]> {
     let data: Vec<f32> = normals
         .iter()
         .flat_map(|n| [n[0], n[1], n[2]].map(|v| f32::from(v) / 127.0).into_iter().chain([0.0]))
         .collect();
     let mut out = vec![[0i8; 4]; normals.len()];
-    // SAFETY: outは count×4 バイト、dataは count×4 個のf32。stride 4・8ビットはmeshoptimizerの許す組み合わせ
+    // SAFETY: out is count×4 bytes and data is count×4 f32 values. Stride 4 with 8 bits is a combination meshoptimizer allows
     unsafe { meshopt_encodeFilterOct(out.as_mut_ptr().cast(), out.len(), 4, 8, data.as_ptr()) };
     out
 }
@@ -398,7 +398,7 @@ struct Writer {
     bin: Vec<u8>,
     views: Vec<Value>,
     accessors: Vec<Value>,
-    /// meshoptのフォールバック（復号後）バッファの長さ。
+    /// Length of the meshopt fallback (decoded) buffer.
     fallback_len: usize,
 }
 
@@ -409,7 +409,7 @@ impl Writer {
         }
     }
 
-    /// buffer 0 にそのまま置くbufferView。
+    /// A bufferView placed as is in buffer 0.
     fn plain_view(&mut self, bytes: Vec<u8>) -> usize {
         self.align_bin();
         self.views.push(json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() }));
@@ -417,7 +417,7 @@ impl Writer {
         self.views.len() - 1
     }
 
-    /// meshoptで符号化したbufferView。`mode`は`ATTRIBUTES`か`TRIANGLES`。
+    /// A bufferView encoded with meshopt. `mode` is `ATTRIBUTES` or `TRIANGLES`.
     fn meshopt_view(&mut self, raw_len: usize, encoded: Vec<u8>, stride: usize, count: usize, mode: &str) -> usize {
         self.align_bin();
         let offset = self.bin.len();
@@ -441,9 +441,9 @@ impl Writer {
         self.views.len() - 1
     }
 
-    /// 4バイト幅の頂点属性をmeshoptで符号化する。
+    /// Encodes a 4-byte-wide vertex attribute with meshopt.
     fn meshopt_attribute<T: Copy + Default>(&mut self, data: &[T]) -> usize {
-        let encoded = encode_vertex_buffer(data).expect("meshoptの頂点符号化");
+        let encoded = encode_vertex_buffer(data).expect("meshopt vertex encoding");
         self.meshopt_view(std::mem::size_of_val(data), encoded, size_of::<T>(), data.len(), "ATTRIBUTES")
     }
 
@@ -456,7 +456,7 @@ impl Writer {
         self.accessors.len() - 1
     }
 
-    /// インスタンスの属性（FLOAT）。件数が少ないため圧縮しない。
+    /// Instance attributes (FLOAT). Not compressed because there are few of them.
     fn instance_accessor(&mut self, values: &[f32], count: usize, ty: &str) -> usize {
         let view = self.plain_view(values.iter().flat_map(|v| v.to_le_bytes()).collect());
         self.accessor(view, FLOAT, count, ty, json!({}))
@@ -465,12 +465,12 @@ impl Writer {
     fn indices(&mut self, idx: &[u32], vertex_count: usize) -> usize {
         let (component, size) =
             if vertex_count <= usize::from(u16::MAX) { (UNSIGNED_SHORT, 2) } else { (UNSIGNED_INT, 4) };
-        let encoded = encode_index_buffer(idx, vertex_count).expect("meshoptの索引符号化");
+        let encoded = encode_index_buffer(idx, vertex_count).expect("meshopt index encoding");
         let view = self.meshopt_view(idx.len() * size, encoded, size, idx.len(), "TRIANGLES");
         self.accessor(view, component, idx.len(), "SCALAR", json!({}))
     }
 
-    /// 量子化・meshoptのprimitive。位置は`min + step·q`で復元する（nodeの行列かインスタンスの倍率）。
+    /// A quantized, meshopt-encoded primitive. Positions are restored as `min + step·q` (via the node matrix or the instance scale).
     fn quantized(&mut self, g: &Group, min: [f64; 3], step: f64) -> Map<String, Value> {
         let q = |p: [f32; 3]| -> [u16; 4] {
             let c = |k: usize| ((f64::from(p[k]) - min[k]) / step).round().clamp(0.0, 65535.0) as u16;
@@ -532,9 +532,9 @@ fn primitive(attributes: Map<String, Value>, indices: usize) -> Map<String, Valu
     p
 }
 
-/// JSONとバイナリをGLBコンテナに詰める。
+/// Packs the JSON and binary into a GLB container.
 fn pack(gltf: &Value, bin: &[u8]) -> Vec<u8> {
-    let mut js = serde_json::to_vec(gltf).expect("glTFのJSON化");
+    let mut js = serde_json::to_vec(gltf).expect("serializing glTF to JSON");
     while !js.len().is_multiple_of(4) {
         js.push(b' ');
     }
@@ -544,7 +544,7 @@ fn pack(gltf: &Value, bin: &[u8]) -> Vec<u8> {
     }
     let total = 12 + 8 + js.len() + 8 + bin.len();
     let mut out = Vec::with_capacity(total);
-    let u32le = |n: usize| u32::try_from(n).expect("GLBが4 GiBを超えない").to_le_bytes();
+    let u32le = |n: usize| u32::try_from(n).expect("the GLB does not exceed 4 GiB").to_le_bytes();
     out.extend(b"glTF");
     out.extend(2u32.to_le_bytes());
     out.extend(u32le(total));
@@ -569,7 +569,7 @@ mod tests {
 
     type Mesh = (Vec<[f64; 3]>, Vec<[f32; 3]>, Vec<u32>);
 
-    /// 1辺1 mの立方体（面ごとに頂点を持つ。ifc-liteと同じフラットシェーディング）を`o`に置く。
+    /// Places a cube with 1 m sides (with vertices per face, flat shading as in ifc-lite) at `o`.
     fn cube(o: [f64; 3]) -> Mesh {
         let mut p = Vec::new();
         let mut n = Vec::new();
@@ -594,7 +594,7 @@ mod tests {
         (p, n, idx)
     }
 
-    /// 15×15頂点（225頂点、インスタンス化の最小頂点数以上）の、z上向きの格子を`o`に置く。
+    /// Places a z-up grid of 15×15 vertices (225 vertices, at least the minimum for instancing) at `o`.
     fn grid(o: [f64; 3]) -> Mesh {
         let k = 15u32;
         let p = (0..k * k).map(|i| [o[0] + f64::from(i % k) * 0.1, o[1] + f64::from(i / k) * 0.1, o[2]]).collect();
@@ -645,7 +645,7 @@ mod tests {
         v.as_u64().unwrap() as usize
     }
 
-    /// bufferViewのバイト列（meshoptなら復号し、OCTAHEDRALフィルタも戻す）。
+    /// The bytes of a bufferView (decoded if it uses meshopt, including undoing the OCTAHEDRAL filter).
     fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
         let v = &js["bufferViews"][i];
         let Some(m) = v["extensions"].get("EXT_meshopt_compression") else {
@@ -659,7 +659,7 @@ mod tests {
             ("ATTRIBUTES", 4) => {
                 let mut out = meshopt::decode_vertex_buffer::<[u8; 4]>(data, count).unwrap();
                 if m["filter"] == "OCTAHEDRAL" {
-                    // SAFETY: outは count×4 バイト
+                    // SAFETY: out is count×4 bytes
                     unsafe { meshopt_decodeFilterOct(out.as_mut_ptr().cast(), count, 4) };
                 }
                 out.concat()
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(prims.len(), 2);
         assert_eq!(js["meshes"].as_array().unwrap().len(), 1);
         assert!(prims.iter().all(|p| p["attributes"].get("COLOR_0").is_some()));
-        // 不透明（赤・灰）が先、半透明が後。材料は白で、半透明はBLEND
+        // Opaque (red, grey) first, translucent after. Materials are white, and translucent ones are BLEND
         assert_eq!(js["accessors"][u(&prims[0]["attributes"]["POSITION"])]["count"], 48);
         assert!(js["materials"][0]["pbrMetallicRoughness"].get("baseColorFactor").is_none());
         assert_eq!(js["materials"][u(&prims[1]["material"])]["alphaMode"], "BLEND");
@@ -704,11 +704,11 @@ mod tests {
         let nor = view(&js, bin, nor_view);
         for k in 0..24 {
             let q = |c: usize| f64::from(u16::from_le_bytes(pos[8 * k + 2 * c..8 * k + 2 * c + 2].try_into().unwrap()));
-            // 復元した座標（Y上）が元の立方体の範囲（x: 10〜11、z: −11〜−10）に0.1 mm以内で収まる
+            // The restored coordinates (Y-up) fall within 0.1 mm of the original cube's range (x: 10–11, z: −11 to −10)
             let x = m[0] * q(0) + m[12];
             let z = m[10] * q(2) + m[14];
             assert!((9.9999..=11.0001).contains(&x) && (-11.0001..=-9.9999).contains(&z), "{x} {z}");
-            // 法線は軸方向の単位ベクトル（INT8で±127）
+            // Normals are unit vectors along the axes (±127 in INT8)
             let n: Vec<i32> = (0..3).map(|c| i32::from(nor[4 * k + c] as i8)).collect();
             assert_eq!(n.iter().map(|v| v.abs()).max(), Some(127), "{n:?}");
             assert_eq!(n.iter().filter(|v| **v == 0).count(), 2, "{n:?}");
@@ -723,7 +723,7 @@ mod tests {
         meshes.push((cube([9., 9., 9.]), RED));
         let glb = build(&meshes);
         let (js, bin) = read(&glb);
-        // 格子3つはテンプレート1つ＋インスタンス3つ、立方体は直接置く
+        // Three grids become one template plus three instances, and the cube is placed directly
         assert_eq!(js["meshes"].as_array().unwrap().len(), 2);
         let node = &js["nodes"][1];
         let ext = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(f32s(&ext["_FEATURE_ID_0"]), vec![0.0, 1.0, 2.0]);
         let t = f32s(&ext["TRANSLATION"]);
         let s = f64::from(f32s(&ext["SCALE"])[0]);
-        // テンプレートの全頂点をインスタンスの変換で戻した外接箱が、元の各格子（Y上）の外接箱と一致する
+        // The bounding box of all template vertices transformed by the instance transform matches that of each original grid (Y-up)
         let prim = &js["meshes"][u(&node["mesh"])]["primitives"][0];
         let pa = &js["accessors"][u(&prim["attributes"]["POSITION"])];
         let pos = view(&js, bin, u(&pa["bufferView"]));

@@ -1,22 +1,22 @@
-//! ジオリファレンスの解決。
+//! Resolution of the georeferencing.
 //!
-//! IFCから読んだ生の値（`RawGeoref`）と利用者の指定（`GeorefOptions`）から、
-//! 局所座標（IFCの世界座標、m）を地球上に置く方法（`Placement`）を1つ決める。
-//! 優先順位は `--origin` → `--map-conversion` → `IfcMapConversion` → `IfcSite`の経緯度。
-//! CRSは文字列のまま持ち、解釈と変換は`geodesy`（PROJ）で行う。
+//! From the raw values read from the IFC (`RawGeoref`) and the user's options (`GeorefOptions`),
+//! decides one way (`Placement`) to place the local coordinates (IFC world coordinates, m) on the globe.
+//! The priority is `--origin` → `--map-conversion` → `IfcMapConversion` → the latitude/longitude of `IfcSite`.
+//! CRSs are kept as strings; parsing and conversion are done in `geodesy` (PROJ).
 
-/// IFCから読んだジオリファレンスの生データ。長さ・角度の値はファイルに書かれた単位のまま。
+/// Raw georeferencing data read from the IFC. Lengths and angles are in the units written in the file.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RawGeoref {
     pub map_conversion: Option<MapConversion>,
     pub site: Option<SiteReference>,
-    /// モデルの3Dコンテキストの`TrueNorth`（局所XY平面で真北を指す向き）。
+    /// `TrueNorth` of the model's 3D context (the direction of true north in the local XY plane).
     pub true_north: Option<[f64; 2]>,
-    /// プロジェクトの長さ単位 [m]。
+    /// Length unit of the project [m].
     pub length_unit_m: f64,
 }
 
-/// `IfcMapConversion` / `IfcMapConversionScaled`。
+/// `IfcMapConversion` / `IfcMapConversionScaled`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MapConversion {
     pub eastings: f64,
@@ -25,66 +25,66 @@ pub struct MapConversion {
     pub x_axis_abscissa: Option<f64>,
     pub x_axis_ordinate: Option<f64>,
     pub scale: Option<f64>,
-    /// `IfcMapConversionScaled`の軸別係数。ない場合は1。
+    /// Per-axis factors of `IfcMapConversionScaled`. 1 if absent.
     pub factors: [f64; 3],
     pub target: Crs,
 }
 
-/// 変換先のCRS（`IfcProjectedCRS`）。投影CRS以外は`Missing`として読む。
+/// The target CRS (`IfcProjectedCRS`). Anything other than a projected CRS is read as `Missing`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Crs {
     Projected { name: Option<String>, map_unit_m: Option<f64> },
     Missing,
 }
 
-/// `IfcSite`の`RefLatitude` / `RefLongitude` / `RefElevation`。
+/// `RefLatitude` / `RefLongitude` / `RefElevation` of `IfcSite`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SiteReference {
     pub latitude_deg: Option<f64>,
     pub longitude_deg: Option<f64>,
-    /// プロジェクトの長さ単位のまま。
+    /// In project length units.
     pub elevation: Option<f64>,
 }
 
-/// 利用者の指定。
+/// The user's options.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GeorefOptions {
-    /// PROJが解釈できるCRS（`EPSG:6677`、`EPSG:6677+6695`など）。地図経路では`IfcMapConversion`の
-    /// TargetCRSを上書きし、ENU経路では原点の緯度・経度・高さのCRSになる。
+    /// A CRS PROJ can parse (`EPSG:6677`, `EPSG:6677+6695`, …). On the map path it overrides the TargetCRS of
+    /// `IfcMapConversion`; on the ENU path it is the CRS of the origin's latitude, longitude and height.
     pub crs: Option<String>,
-    /// 緯度・経度 [度]・正標高 [m]。
+    /// Latitude and longitude [degrees] and elevation [m].
     pub origin: Option<[f64; 3]>,
-    /// 局所原点の地図座標（東, 北, 正標高 [m]）と、局所X軸から東への回転（反時計回り）[度]。`--crs`が必要。
+    /// Map coordinates of the local origin (easting, northing, elevation [m]) and the counterclockwise rotation of the local X axis from east [degrees]. Requires `--crs`.
     pub map_conversion: Option<[f64; 4]>,
 }
 
-/// ENU経路で`--crs`がないときの、原点の緯度・経度のCRS（WGS84）。
+/// The CRS of the origin's latitude and longitude on the ENU path when there is no `--crs` (WGS84).
 const DEFAULT_GEOGRAPHIC_CRS: &str = "EPSG:4326";
 
-/// 局所座標（m）を地球上に置く方法。
+/// A way to place local coordinates (m) on the globe.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Placement {
-    /// 局所座標→地図座標（東・北）と標高。
+    /// Local coordinates → map coordinates (east, north) and elevation.
     Grid(GridPlacement),
-    /// 原点の東・北・高さ（ENU）。
+    /// East, north and height (ENU) around an origin.
     Enu(EnuPlacement),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridPlacement {
-    /// 地図座標のCRS（投影座標系。高さの基準を含んでもよい）。
+    /// The CRS of the map coordinates (a projected CRS; it may include a height reference).
     pub crs: String,
-    /// 局所原点の地図座標 [m] と標高 [m]。
+    /// Map coordinates [m] and elevation [m] of the local origin.
     pub origin: [f64; 3],
-    /// 局所X軸から地図の東への回転（反時計回り）[rad]。
+    /// Counterclockwise rotation of the local X axis from map east [rad].
     pub rotation: f64,
-    /// メートル化した局所座標に掛ける倍率。
+    /// Scale applied to the local coordinates after conversion to metres.
     pub scale: f64,
     pub factors: [f64; 3],
 }
 
 impl GridPlacement {
-    /// 局所座標 [m] → (東, 北, 正標高) [m]。
+    /// Local coordinates [m] → (east, north, elevation) [m].
     pub fn to_map(&self, p: [f64; 3]) -> [f64; 3] {
         let (s, c) = self.rotation.sin_cos();
         let x = self.scale * self.factors[0] * p[0];
@@ -96,34 +96,34 @@ impl GridPlacement {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnuPlacement {
-    /// 原点の緯度・経度・高さのCRS（地理座標系。高さの基準を含んでもよい）。
+    /// The CRS of the origin's latitude, longitude and height (a geographic CRS; it may include a height reference).
     pub crs: String,
     pub latitude_deg: f64,
     pub longitude_deg: f64,
     pub orthometric_height: f64,
-    /// 局所X軸から東への回転（反時計回り）[rad]。
+    /// Counterclockwise rotation of the local X axis from east [rad].
     pub rotation: f64,
 }
 
 impl EnuPlacement {
-    /// 局所座標 [m] → 原点のENU [m]。
+    /// Local coordinates [m] → ENU around the origin [m].
     pub fn to_enu(&self, p: [f64; 3]) -> [f64; 3] {
         let (s, c) = self.rotation.sin_cos();
         [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]]
     }
 }
 
-/// 解決の結果。
+/// The result of the resolution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
     pub placement: Placement,
     pub warnings: Vec<String>,
 }
 
-/// ENUで置いたとき、局所原点からこれ以上離れた形状があれば警告する [m]。
+/// When placing with ENU, warn if any geometry is farther than this from the local origin [m].
 const FAR_FROM_ORIGIN_M: f64 = 1000.0;
 
-/// ジオリファレンスを解決する。`reach_m`は形状の局所原点からの最大水平距離。
+/// Resolves the georeferencing. `reach_m` is the maximum horizontal distance of the geometry from the local origin.
 pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Resolved, String> {
     let mut warnings = Vec::new();
     let placement = if let Some([lat, lon, h]) = opts.origin {
@@ -142,14 +142,14 @@ pub fn resolve(raw: &RawGeoref, opts: &GeorefOptions, reach_m: f64) -> Result<Re
         let elevation = raw.site.as_ref().and_then(|s| s.elevation).unwrap_or(0.0) * raw.length_unit_m;
         site(raw, lat, lon, elevation, opts)
     } else {
-        return Err("ジオリファレンスがない（IfcMapConversion・IfcSiteの経緯度のどちらもない）。\
-                    --origin LAT,LON[,H] で原点を指定すると、その点を中心に東・北・高さで配置する"
+        return Err("no georeferencing (neither IfcMapConversion nor the latitude/longitude of IfcSite); \
+                    specify an origin with --origin LAT,LON[,H] to place the model as east, north and height around that point"
             .into());
     };
     if matches!(placement, Placement::Enu(_)) && opts.origin.is_none() && reach_m > FAR_FROM_ORIGIN_M {
         warnings.push(format!(
-            "形状が局所原点から最大{reach_m:.0} m離れている。局所座標が地図座標の値なら \
-             --map-conversion 0,0 --crs EPSG:xxxx を指定する"
+            "the geometry extends up to {reach_m:.0} m from the local origin; if the local coordinates are map coordinates, \
+             specify --map-conversion 0,0 --crs EPSG:xxxx"
         ));
     }
     Ok(Resolved { placement, warnings })
@@ -179,16 +179,16 @@ fn map_conversion(
     }))
 }
 
-/// `--map-conversion`で与えた地図座標の基準。局所座標（m）をそのまま使い、倍率は1とする。
+/// The map coordinate reference given by `--map-conversion`. Local coordinates (m) are used as is, with a scale of 1.
 fn given_map_conversion(
     raw: &RawGeoref,
     [e, n, h, rotation_deg]: [f64; 4],
     opts: &GeorefOptions,
     warnings: &mut Vec<String>,
 ) -> Result<Placement, String> {
-    let crs = opts.crs.clone().ok_or("--map-conversion には --crs EPSG:xxxx が必要")?;
+    let crs = opts.crs.clone().ok_or("--map-conversion requires --crs EPSG:xxxx")?;
     if raw.map_conversion.is_some() {
-        warnings.push("ファイルのIfcMapConversionは使わず、--map-conversionで置いた".into());
+        warnings.push("placed with --map-conversion instead of the file's IfcMapConversion".into());
     }
     Ok(Placement::Grid(GridPlacement {
         crs,
@@ -199,8 +199,8 @@ fn given_map_conversion(
     }))
 }
 
-/// `Scale`の実効倍率を決める。実効倍率が100倍以上ずれ、逆数なら1になる場合は、逆数で書かれている
-/// （公式サンプルにもある）とみなして逆数を使う。
+/// Decides the effective scale of `Scale`. If the effective scale is off by a factor of 100 or more and its inverse is 1,
+/// it is assumed to have been written as the inverse (as in some official samples) and the inverse is used.
 fn effective_scale(
     spec_scale: f64,
     scale: Option<f64>,
@@ -214,11 +214,13 @@ fn effective_scale(
         && inv.log10().abs() < 0.01
     {
         warnings
-            .push(format!("IfcMapConversion.Scaleの実効倍率が{spec_scale}で、逆数で書かれているとみなし{inv}を使う"));
+            .push(format!("the effective scale of IfcMapConversion.Scale is {spec_scale}; assuming it was written as the inverse and using {inv}"));
         return inv;
     }
     if (spec_scale - 1.0).abs() > 0.01 {
-        warnings.push(format!("IfcMapConversion.Scaleの実効倍率が{spec_scale}で、1から1%以上ずれている"));
+        warnings.push(format!(
+            "the effective scale of IfcMapConversion.Scale is {spec_scale}, which differs from 1 by 1% or more"
+        ));
     }
     spec_scale
 }
@@ -227,20 +229,20 @@ fn site_lat_lon(site: Option<&SiteReference>, warnings: &mut Vec<String>) -> Opt
     let s = site?;
     let (lat, lon) = (s.latitude_deg?, s.longitude_deg?);
     if lat == 0.0 && lon == 0.0 {
-        warnings.push("IfcSiteの経緯度が(0, 0)のため、未設定とみなした".into());
+        warnings.push("the latitude/longitude of IfcSite is (0, 0), so it is treated as unset".into());
         return None;
     }
     if let Some(what) = known_default(lat, lon) {
         warnings.push(format!(
-            "IfcSiteの経緯度（{lat:.6}, {lon:.6}）は{what}と一致し、実際の位置ではない可能性が高い。\
-             --origin LAT,LON[,H] か --map-conversion E,N --crs EPSG:xxxx で置き直す"
+            "the latitude/longitude of IfcSite ({lat:.6}, {lon:.6}) matches {what} and is probably not the real location; \
+             place the model again with --origin LAT,LON[,H] or --map-conversion E,N --crs EPSG:xxxx"
         ));
     }
     Some((lat, lon))
 }
 
-/// IfcSiteの経緯度を原点とする東・北・高さ。TrueNorthは局所XY平面で北を指すので、
-/// 局所X軸から東への角度は 90° − atan2(ty, tx)。
+/// East, north and height around the latitude/longitude of IfcSite. TrueNorth points north in the local XY plane,
+/// so the angle of the local X axis from east is 90° − atan2(ty, tx).
 fn site(raw: &RawGeoref, lat: f64, lon: f64, elevation: f64, opts: &GeorefOptions) -> Placement {
     let rotation = raw.true_north.map_or(0.0, |[tx, ty]| std::f64::consts::FRAC_PI_2 - ty.atan2(tx));
     Placement::Enu(EnuPlacement {
@@ -256,30 +258,30 @@ fn geographic_crs(opts: &GeorefOptions) -> String {
     opts.crs.clone().unwrap_or_else(|| DEFAULT_GEOGRAPHIC_CRS.into())
 }
 
-/// オーサリングツールの既定値とみられるIfcSiteの経緯度 [度]。無関係な複数のファイルで同じ値を確認したもの
-/// （度分秒と百万分の1秒で書かれた値を度に直した）。
+/// Latitudes and longitudes of IfcSite that look like authoring-tool defaults [degrees]. The same values were seen in several unrelated files
+/// (values written in degrees, minutes, seconds and millionths of a second, converted to degrees).
 const KNOWN_DEFAULTS: [(f64, f64, &str); 2] = [
     // (42,24,53,508911), (-71,-15,-29,-58837)
-    (42.414_863_586_4, -71.258_071_899_2, "Revitの既定の場所（米国マサチューセッツ州）"),
+    (42.414_863_586_4, -71.258_071_899_2, "Revit's default location (Massachusetts, USA)"),
     // (35,41,6,4943), (139,45,3,625488)
-    (35.685_001_373_1, 139.751_007_080_0, "Revitの都市リストの東京"),
+    (35.685_001_373_1, 139.751_007_080_0, "Tokyo in Revit's city list"),
 ];
 
 fn known_default(lat: f64, lon: f64) -> Option<&'static str> {
     KNOWN_DEFAULTS.iter().find(|(a, b, _)| (lat - a).abs() < 1e-6 && (lon - b).abs() < 1e-6).map(|&(_, _, w)| w)
 }
 
-/// 地図座標のCRSを決める。`--crs`があればそれを優先し、なければIFCのCRS名からEPSGコードを読む。
+/// Decides the CRS of the map coordinates. `--crs` takes priority; otherwise the EPSG code is read from the IFC's CRS name.
 fn crs_for(override_crs: Option<&str>, name: Option<&str>) -> Result<String, String> {
     if let Some(c) = override_crs {
         return Ok(c.to_string());
     }
     name.and_then(parse_epsg)
         .map(|code| format!("EPSG:{code}"))
-        .ok_or_else(|| format!("CRSが分からない（{}）。--crs EPSG:xxxx で指定する", name.unwrap_or("名前なし")))
+        .ok_or_else(|| format!("unknown CRS ({}); specify it with --crs EPSG:xxxx", name.unwrap_or("no name")))
 }
 
-/// `EPSG:6677`、`EPSG: 6677`、`urn:ogc:def:crs:EPSG::6677` などからコードを取り出す。
+/// Extracts the code from `EPSG:6677`, `EPSG: 6677`, `urn:ogc:def:crs:EPSG::6677` and the like.
 fn parse_epsg(s: &str) -> Option<u32> {
     let upper = s.to_ascii_uppercase();
     let rest = &upper[upper.find("EPSG")? + 4..];
@@ -340,7 +342,7 @@ mod tests {
 
     #[test]
     fn omitted_map_unit_means_project_unit() {
-        // MapUnitなし＝プロジェクト単位（mm）。Eastingsもmmで書かれている
+        // No MapUnit means project units (mm). Eastings is also written in mm
         let mut m = mc(1.0, None);
         m.eastings *= 1000.0;
         m.northings *= 1000.0;
@@ -353,7 +355,7 @@ mod tests {
 
     #[test]
     fn inverted_scale_is_detected() {
-        // 仕様どおりならScale=0.001だが、1000と書かれている
+        // By the spec Scale would be 0.001, but 1000 is written
         let raw = RawGeoref { map_conversion: Some(mc(1000.0, Some(1.0))), ..raw_mm() };
         let r = resolve(&raw, &opts(), 0.0).unwrap();
         assert!((grid(&r).scale - 1.0).abs() < 1e-12);
@@ -364,7 +366,7 @@ mod tests {
     fn rotation_and_axis_factors() {
         let mut m = mc(0.001, Some(1.0));
         m.x_axis_abscissa = Some(0.0);
-        m.x_axis_ordinate = Some(2.0); // 正規化されていなくてもよい。90°
+        m.x_axis_ordinate = Some(2.0); // Need not be normalized. 90°
         m.factors = [2.0, 1.0, 1.0];
         let raw = RawGeoref { map_conversion: Some(m), ..raw_mm() };
         let g = grid(&resolve(&raw, &opts(), 0.0).unwrap());
@@ -410,7 +412,7 @@ mod tests {
     fn site_enu_uses_elevation_in_project_units_and_true_north() {
         let raw = RawGeoref {
             site: Some(SiteReference { latitude_deg: Some(35.0), longitude_deg: Some(139.0), elevation: Some(3000.0) }),
-            true_north: Some([1.0, 0.0]), // 局所+Xが北
+            true_north: Some([1.0, 0.0]), // local +X is north
             ..raw_mm()
         };
         let r = resolve(&raw, &opts(), 0.0).unwrap();
@@ -449,7 +451,7 @@ mod tests {
         assert_eq!(r.warnings.len(), 1);
         let g = grid(&r);
         assert_eq!((g.crs.as_str(), g.scale), ("EPSG:6677", 1.0));
-        // 局所X軸を東から90°回すと、局所の(1, 0)は北へ1 m
+        // Rotating the local X axis 90° from east moves local (1, 0) 1 m to the north
         let p = g.to_map([1.0, 0.0, 2.0]);
         assert!((p[0] - 100.0).abs() < 1e-9 && (p[1] - 201.0).abs() < 1e-9 && (p[2] - 5.0).abs() < 1e-9, "{p:?}");
     }
@@ -461,9 +463,9 @@ mod tests {
             ..raw_mm()
         };
         let boston = resolve(&site(42.414_863_586_4, -71.258_071_899_2), &opts(), 0.0).unwrap();
-        assert!(boston.warnings.iter().any(|w| w.contains("Revitの既定の場所")), "{:?}", boston.warnings);
+        assert!(boston.warnings.iter().any(|w| w.contains("Revit's default location")), "{:?}", boston.warnings);
         let tokyo = resolve(&site(35.685_001_4, 139.751_007_1), &opts(), 0.0).unwrap();
-        assert!(tokyo.warnings.iter().any(|w| w.contains("東京")), "{:?}", tokyo.warnings);
+        assert!(tokyo.warnings.iter().any(|w| w.contains("Tokyo")), "{:?}", tokyo.warnings);
         assert!(resolve(&site(35.681_236, 139.767_125), &opts(), 0.0).unwrap().warnings.is_empty());
     }
 }

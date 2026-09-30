@@ -1,10 +1,10 @@
-//! プロジェクト単位からSI単位への換算。
+//! Conversion from project units to SI units.
 //!
-//! IFCのプロパティ値と数量は、ファイルが宣言した単位（ミリメートルなど）のまま書かれている。
-//! 3D Tilesの列はSI単位（m、m²、m³、kg）にそろえるため、値の型から量の種類を判定し、
-//! プロジェクト単位の換算係数を掛ける。
+//! IFC property values and quantities are written in the units declared by the file (e.g. millimetres).
+//! The 3D Tiles columns use SI units (m, m², m³, kg), so the kind of quantity is determined from the value type
+//! and multiplied by the project unit's conversion factor.
 
-/// SI単位へ換算する量の種類。
+/// Kinds of quantities converted to SI units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Quantity {
     Length,
@@ -14,7 +14,7 @@ pub enum Quantity {
 }
 
 impl Quantity {
-    /// プロパティの値の型（`IFCLENGTHMEASURE`など）から量の種類を判定する。
+    /// Determines the kind of quantity from a property value type (e.g. `IFCLENGTHMEASURE`).
     pub fn of_measure(value_type: &str) -> Option<Self> {
         let t = value_type.to_ascii_uppercase();
         match t.strip_prefix("IFC").unwrap_or(&t) {
@@ -26,7 +26,7 @@ impl Quantity {
         }
     }
 
-    /// 数量（`IfcQuantityLength`など）の種類名から判定する。
+    /// Determines the kind of quantity from a quantity type name (e.g. `IfcQuantityLength`).
     pub fn of_quantity_kind(kind: &str) -> Option<Self> {
         match kind {
             "Length" => Some(Self::Length),
@@ -47,7 +47,7 @@ impl Quantity {
     }
 }
 
-/// プロジェクト単位の値にこの係数を掛けるとSI単位になる。
+/// Multiplying a value in project units by this factor gives SI units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitScales {
     pub length: f64,
@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(Quantity::of_measure("IfcAreaMeasure"), Some(Quantity::Area));
         assert_eq!(Quantity::of_measure("IFCVOLUMEMEASURE"), Some(Quantity::Volume));
         assert_eq!(Quantity::of_measure("IFCMASSMEASURE"), Some(Quantity::Mass));
-        // 比率・熱貫流率・文字列は換算しない
+        // Ratios, thermal transmittance and strings are not converted
         assert_eq!(Quantity::of_measure("IFCPOSITIVERATIOMEASURE"), None);
         assert_eq!(Quantity::of_measure("IFCTHERMALTRANSMITTANCEMEASURE"), None);
         assert_eq!(Quantity::of_measure("IFCLABEL"), None);

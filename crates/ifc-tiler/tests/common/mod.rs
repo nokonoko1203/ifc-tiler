@@ -1,4 +1,4 @@
-//! 結合テストの共通部分: 出力のtilesetを読み戻す（meshoptの復号を含む）。
+//! Shared parts of the integration tests: reads the output tileset back (including meshopt decoding).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ pub fn out_dir(name: &str) -> PathBuf {
     out
 }
 
-/// 出力を読み戻した部材（属性と、ECEFの頂点）。
+/// An element read back from the output (its properties and ECEF vertices).
 pub struct Feature {
     pub props: BTreeMap<String, Value>,
     pub ecef: Vec<[f64; 3]>,
@@ -44,7 +44,7 @@ fn collect(tile: &Value, uris: &mut Vec<String>) {
 }
 
 unsafe extern "C" {
-    // meshopt crateが公開していない、同梱のmeshoptimizerのフィルタ復号
+    // Filter decoding of the bundled meshoptimizer, which the meshopt crate does not expose
     fn meshopt_decodeFilterOct(buffer: *mut std::ffi::c_void, count: usize, stride: usize);
 }
 
@@ -52,7 +52,7 @@ fn u(v: &Value) -> usize {
     v.as_u64().unwrap() as usize
 }
 
-/// bufferViewのバイト列（meshoptなら復号する）。
+/// The bytes of a bufferView (decoded if it uses meshopt).
 fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
     let v = &js["bufferViews"][i];
     if let Some(m) = v["extensions"].get("EXT_meshopt_compression") {
@@ -67,7 +67,7 @@ fn view(js: &Value, bin: &[u8], i: usize) -> Vec<u8> {
             ("ATTRIBUTES", 4) => {
                 let mut out = meshopt::decode_vertex_buffer::<[u8; 4]>(data, count).unwrap();
                 if m["filter"] == "OCTAHEDRAL" {
-                    // SAFETY: outは count×4 バイト
+                    // SAFETY: out is count×4 bytes
                     unsafe { meshopt_decodeFilterOct(out.as_mut_ptr().cast(), count, 4) };
                 }
                 out.concat()
@@ -118,7 +118,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
             f.props.insert(id.clone(), v);
         }
     }
-    // 全nodeを見る。インスタンス化したnodeは、インスタンスごとに 平行移動＋倍率 を掛け、部材番号はインスタンスの属性
+    // Look at every node. For an instanced node, apply translation + scale per instance; the element index is an attribute of the instance
     for node in js["nodes"].as_array().unwrap() {
         let matrix: Vec<f64> = node["matrix"]
             .as_array()
@@ -131,7 +131,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 .collect()
         };
         let inst = &node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
-        // (平行移動, 倍率, 部材番号)。インスタンス化していなければ1つで、部材番号は頂点の属性
+        // (translation, scale, element index). A single entry if not instanced, in which case the element index is a vertex attribute
         let placements: Vec<([f64; 3], [f64; 3], Option<usize>)> = if inst.is_object() {
             let t = floats(&inst["TRANSLATION"]);
             let s = floats(&inst["SCALE"]);
@@ -156,7 +156,7 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 .map(|a| view(&js, bin, u(&js["accessors"][u(a)]["bufferView"])));
             let stride = js["bufferViews"][u(&pa["bufferView"])]["byteStride"].as_u64().unwrap() as usize;
             for k in 0..u(&pa["count"]) {
-                // 位置はUINT16に量子化してある（KHR_mesh_quantization）
+                // Positions are quantized to UINT16 (KHR_mesh_quantization)
                 let q: [f64; 3] = std::array::from_fn(|c| {
                     let o = k * stride + 2 * c;
                     f64::from(u16::from_le_bytes(pos[o..o + 2].try_into().unwrap()))
@@ -166,11 +166,11 @@ fn read_glb(glb: &[u8], m: &[f64]) -> Vec<Feature> {
                 });
                 for (t, s, f) in &placements {
                     let p: [f64; 3] = std::array::from_fn(|c| t[c] + s[c] * g[c]);
-                    let enu = [p[0], -p[2], p[1]]; // glTFのY上 → ENU
+                    let enu = [p[0], -p[2], p[1]]; // glTF Y-up → ENU
                     let e: [f64; 3] =
                         std::array::from_fn(|r| m[r] * enu[0] + m[4 + r] * enu[1] + m[8 + r] * enu[2] + m[12 + r]);
                     let f = f.unwrap_or_else(|| {
-                        let b = fid.as_ref().expect("インスタンス化していないprimitiveは部材番号を持つ");
+                        let b = fid.as_ref().expect("a primitive that is not instanced has an element index");
                         f32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap()) as usize
                     });
                     features[f].ecef.push(e);

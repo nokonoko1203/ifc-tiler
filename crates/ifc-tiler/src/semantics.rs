@@ -1,20 +1,20 @@
-//! 3D Tilesのfeatureにする部材の決定。
+//! Deciding which elements become 3D Tiles features.
 //!
-//! 形状を持つ製品から、開口・室・構造解析・型などを除き、集約の部品は親の部材にまとめる
-//! （多層壁の親は軸線しか持たず、Psetは親にある。部品にはPsetがない）。
+//! From the products that have geometry, openings, spaces, structural analysis elements and types are excluded,
+//! and aggregated parts are merged into their parent (a multi-layer wall's parent only has an axis, and its Psets are on the parent; parts have none).
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::metadata::ElementRecord;
 use crate::source::{Product, SourceModel};
 
-/// featureになる部材。
+/// An element that becomes a feature.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Element {
     pub record: ElementRecord,
-    /// 所属階（`Semantics::storeys`の番号）。
+    /// Storey the element belongs to (index into `Semantics::storeys`).
     pub storey: usize,
-    /// `SourceModel::meshes`の番号。
+    /// Indices into `SourceModel::meshes`.
     pub meshes: Vec<usize>,
 }
 
@@ -28,7 +28,7 @@ pub struct Storey {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Semantics {
     pub elements: Vec<Element>,
-    /// 標高の昇順。所属階のない部材は`(unassigned)`。
+    /// In ascending order of elevation. Elements without a storey go to `(unassigned)`.
     pub storeys: Vec<Storey>,
 }
 
@@ -59,7 +59,7 @@ fn is_spatial(class: &str) -> bool {
     SPATIAL.contains(&class)
 }
 
-/// featureにしない製品か。
+/// Whether a product is excluded from becoming a feature.
 fn is_excluded(class: &str) -> bool {
     matches!(class, "IfcOpeningElement" | "IfcOpeningStandardCase" | "IfcVirtualElement" | "IfcAnnotation" | "IfcGrid")
         || class.starts_with("IfcStructural")
@@ -108,7 +108,7 @@ pub fn build(model: &SourceModel) -> Semantics {
         s.elements.push(Element { record, storey: k, meshes });
     }
 
-    // 階を標高の昇順に並べ替え、部材の階番号を付け直す
+    // Sort the storeys by elevation and renumber the elements' storeys
     let storey_of = |id: &Option<u32>| id.and_then(|i| model.products.get(&i));
     let mut order: Vec<usize> = (0..storey_ids.len()).collect();
     order.sort_by(|&a, &b| {
@@ -135,7 +135,7 @@ pub fn build(model: &SourceModel) -> Semantics {
     s
 }
 
-/// 集約を上へ辿り、空間要素の直下にある部材を返す。
+/// Follows aggregation upwards and returns the element directly under a spatial element.
 fn owner_of(model: &SourceModel, id: u32) -> u32 {
     let mut cur = id;
     for _ in 0..32 {
@@ -148,7 +148,7 @@ fn owner_of(model: &SourceModel, id: u32) -> u32 {
     cur
 }
 
-/// 空間構造を上へ辿り、最初の階と建物を返す。
+/// Follows the spatial structure upwards and returns the first storey and building.
 fn spatial_ancestors(model: &SourceModel, id: u32) -> (Option<u32>, Option<u32>) {
     let (mut storey, mut building) = (None, None);
     let mut cur = id;
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    /// 建物1 > 階(1階 0 m, 2階 3 m)。1階に多層壁（部品2つ）と開口、2階に柱。
+    /// Building 1 > storeys (1F at 0 m, 2F at 3 m). A multi-layer wall (two parts) and an opening on 1F, a column on 2F.
     fn model() -> SourceModel {
         let mut m = SourceModel::default();
         for (id, p) in [

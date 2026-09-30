@@ -1,10 +1,10 @@
-//! タイル分割。1つの階の部材を平面の四分木に分け、大きい部材ほど上位のタイルに置く（ADD）。
+//! Tile splitting. The elements of one storey are divided by a planar quadtree, and larger elements go in higher tiles (ADD).
 //!
-//! 各ノードは、ノードの平面の広がりの1/4以上の部材を（最大`max_features`個まで）自分で持ち、
-//! 残りを重心で4つに分ける。ノードのgeometricErrorは、子孫に回した部材の対角長の最大値とする。
-//! 遠くからは大きな部材だけが描かれ、近づくと小さな部材が足される。
+//! Each node keeps the elements whose diagonal is at least 1/4 of the node's planar extent (up to `max_features`),
+//! and splits the rest into four by centroid. The node's geometricError is the largest diagonal among the elements pushed to descendants.
+//! From far away only large elements are drawn, and smaller ones are added as the camera approaches.
 
-/// 軸平行の外接箱。
+/// Axis-aligned bounding box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
     pub min: [f64; 3],
@@ -21,7 +21,7 @@ impl Aabb {
         }
     }
 
-    /// 点列の外接箱。空なら`EMPTY`。
+    /// Bounding box of a sequence of points. `EMPTY` if there are none.
     pub fn from_points(points: impl IntoIterator<Item = [f64; 3]>) -> Self {
         let mut b = Self::EMPTY;
         points.into_iter().for_each(|p| b.add(p));
@@ -47,22 +47,22 @@ impl Aabb {
     }
 }
 
-/// タイルの木のノード。
+/// A node of the tile tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
-    /// 四分木のパス（根は`r`、子は`r0`〜`r3`…）。
+    /// Quadtree path (`r` for the root, `r0`–`r3`… for children).
     pub path: String,
-    /// このノードのcontentに入れる部材（呼び出し側の番号）。
+    /// Elements placed in this node's content (indices of the caller).
     pub elements: Vec<usize>,
     pub geometric_error: f64,
-    /// このノードと子孫の全部材の外接箱。
+    /// Bounding box of all elements of this node and its descendants.
     pub bounds: Aabb,
     pub children: Vec<Node>,
 }
 
 const MAX_DEPTH: usize = 10;
 
-/// `items`は（部材の番号、外接箱）。
+/// `items` are (element index, bounding box).
 pub fn build(items: &[(usize, Aabb)], max_features: usize) -> Node {
     node(items.to_vec(), "r".into(), 0, max_features.max(1))
 }
@@ -81,7 +81,7 @@ fn node(mut items: Vec<(usize, Aabb)>, path: String, depth: usize, max: usize) -
     }
     let [sx, sy, _] = bounds.size();
     let threshold = sx.max(sy) / 4.0;
-    // 大きい順に並べ、しきい値以上の部材を上限まで自分で持つ
+    // Sort by size, and keep the elements above the threshold up to the limit
     items.sort_by(|a, b| b.1.diagonal().total_cmp(&a.1.diagonal()).then(a.0.cmp(&b.0)));
     let own = items.iter().take(max).take_while(|(_, a)| a.diagonal() >= threshold).count();
     let rest = items.split_off(own);
@@ -92,7 +92,7 @@ fn node(mut items: Vec<(usize, Aabb)>, path: String, depth: usize, max: usize) -
         quadrants[usize::from(x > c[0]) + 2 * usize::from(y > c[1])].push(it);
     }
     if own == 0 && quadrants.iter().filter(|q| !q.is_empty()).count() == 1 {
-        // 分けても同じ集合になる（重心がすべて同じ象限）
+        // Splitting would give the same set (all centroids fall in the same quadrant)
         return leaf(quadrants.into_iter().flatten().collect(), path);
     }
     let geometric_error = quadrants.iter().flatten().map(|(_, a)| a.diagonal()).fold(0.0, f64::max);
@@ -125,7 +125,7 @@ mod tests {
     fn check_invariants(n: &Node, max: usize) {
         assert!(n.elements.len() <= max || n.children.is_empty(), "{}", n.path);
         for c in &n.children {
-            // 子のgeometricErrorは親以下（SSEが単調になる）
+            // A child's geometricError is at most its parent's (keeps SSE monotonic)
             assert!(c.geometric_error <= n.geometric_error, "{} > {}", c.path, n.path);
             check_invariants(c, max);
         }
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn large_elements_stay_on_top_and_small_ones_go_down() {
-        // 100 m四方に、40 mの床2枚と1 mの家具400個
+        // Within 100 m × 100 m: two 40 m floors and 400 pieces of 1 m furniture
         let mut items = vec![(0, cube(0.0, 0.0, 40.0)), (1, cube(60.0, 60.0, 40.0))];
         for i in 0..400 {
             items.push((2 + i, cube((i % 20) as f64 * 5.0, (i / 20) as f64 * 5.0, 1.0)));

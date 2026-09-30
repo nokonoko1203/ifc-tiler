@@ -7,29 +7,29 @@ use std::time::Instant;
 use clap::Parser;
 use ifc_tiler::{Error, GeorefOptions, convert};
 
-/// IFCを部材情報付きの3D Tiles 1.1へ変換する
+/// Converts IFC into 3D Tiles 1.1 with element metadata
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
-    /// 入力IFC（IFC2x3 / IFC4 / IFC4X3）
+    /// Input IFC file (IFC2x3 / IFC4 / IFC4X3)
     input: PathBuf,
-    /// 出力先のディレクトリ（tileset.json、tiles/）
+    /// Output directory (tileset.json, tiles/)
     #[arg(short, long)]
     output: PathBuf,
-    /// CRS（例: EPSG:6677、高さの基準を含めるなら EPSG:6677+6695）。地図座標ではIfcMapConversionの
-    /// TargetCRSを上書きし（--map-conversion では必須）、--origin・IfcSiteでは緯度・経度・高さのCRSになる
+    /// CRS (e.g. EPSG:6677, or EPSG:6677+6695 to include a height reference). For map coordinates it overrides
+    /// the TargetCRS of IfcMapConversion (required with --map-conversion); for --origin and IfcSite it is the CRS of latitude, longitude and height
     #[arg(long, value_parser = crs)]
     crs: Option<String>,
-    /// ファイルのジオリファレンスを使わず、この点を原点とする東・北・高さで置く（緯度,経度[,標高m]）
+    /// Ignore the file's georeferencing and place the model as east, north and height around this point (latitude,longitude[,elevation in m])
     #[arg(long, value_parser = origin, allow_hyphen_values = true)]
     origin: Option<[f64; 3]>,
-    /// 局所座標を地図座標で置く（東,北[,標高[,局所X軸から東への回転°]]、m）。--crsが必要。
-    /// ファイルのジオリファレンスの代わりに使う。局所座標が平面直角座標の値なら 0,0
+    /// Place the local coordinates in map coordinates (easting,northing[,elevation[,rotation of the local X axis from east in degrees]], in m). Requires --crs.
+    /// Used instead of the file's georeferencing. Use 0,0 if the local coordinates are already map coordinates
     #[arg(long, value_parser = map_conversion, allow_hyphen_values = true, conflicts_with = "origin")]
     map_conversion: Option<[f64; 4]>,
 }
 
-/// 数字だけならEPSGコードとみなす。それ以外はPROJにそのまま渡す。
+/// A bare number is treated as an EPSG code. Anything else is passed to PROJ as is.
 fn crs(s: &str) -> Result<String, String> {
     let s = s.trim();
     Ok(if s.parse::<u32>().is_ok() { format!("EPSG:{s}") } else { s.to_string() })
@@ -41,7 +41,7 @@ fn origin(s: &str) -> Result<[f64; 3], String> {
     match v.as_slice() {
         [lat, lon] => Ok([*lat, *lon, 0.0]),
         [lat, lon, h] => Ok([*lat, *lon, *h]),
-        _ => Err(format!("緯度,経度[,正標高] の形で指定する: {s}")),
+        _ => Err(format!("specify it as latitude,longitude[,elevation]: {s}")),
     }
 }
 
@@ -52,7 +52,7 @@ fn map_conversion(s: &str) -> Result<[f64; 4], String> {
         [e, n] => Ok([*e, *n, 0.0, 0.0]),
         [e, n, h] => Ok([*e, *n, *h, 0.0]),
         [e, n, h, r] => Ok([*e, *n, *h, *r]),
-        _ => Err(format!("東,北[,正標高[,回転°]] の形で指定する: {s}")),
+        _ => Err(format!("specify it as easting,northing[,elevation[,rotation°]]: {s}")),
     }
 }
 

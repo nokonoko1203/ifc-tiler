@@ -1,4 +1,4 @@
-//! tileset.jsonの組み立て。
+//! Assembly of tileset.json.
 
 use serde_json::{Map, Value, json};
 
@@ -7,7 +7,7 @@ use crate::metadata::{LOGICAL_ENUM_ID, Table, logical_enum};
 use crate::semantics::Storey;
 use crate::tiling::{Aabb, Node};
 
-/// `trees[s]`は階`s`のタイルの木。`uri(s, node)`はノードのcontentのURI（ないノードは`None`）。
+/// `trees[s]` is the tile tree of storey `s`. `uri(s, node)` is the URI of the node's content (`None` for nodes without content).
 pub fn build(
     frame: &Frame,
     bounds: &Aabb,
@@ -72,7 +72,7 @@ fn node(n: &Node, storey: usize, uri: &dyn Fn(usize, &Node) -> Option<String>) -
     v
 }
 
-/// 3D Tilesの`box`（中心と3本の半軸）。つぶれた箱を避けるため半長さは1 cm以上にする。
+/// A 3D Tiles `box` (center and three half axes). Half lengths are at least 1 cm to avoid degenerate boxes.
 fn bounding_box(b: &Aabb) -> [f64; 12] {
     let c = b.center();
     let h = b.size().map(|s| (s / 2.0).max(0.01));
@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(c["content"]["uri"], "tiles/000_r.glb");
         assert_eq!(c["content"]["group"], 0);
         assert_eq!(c["children"][0]["geometricError"], 0.0);
-        // z方向がつぶれた箱も半長さ1 cm
+        // A box flattened in z also gets a half length of 1 cm
         assert_eq!(c["boundingVolume"]["box"][11], 0.01);
         assert_eq!(ts["groups"][0]["properties"]["name"], "1階");
         assert!(ts["schema"]["classes"]["element"]["properties"]["expressId"]["required"].as_bool().unwrap());

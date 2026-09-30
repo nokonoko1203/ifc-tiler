@@ -1,15 +1,15 @@
-//! 局所座標から地心直交座標（ECEF）への変換と、タイルを置く根のENUフレーム。
+//! Conversion from local coordinates to earth-centered earth-fixed (ECEF) coordinates, and the root ENU frame the tiles are placed in.
 //!
-//! 地図座標・経緯度からECEFへの変換はPROJに任せる（EPSGコードで表せるCRSなら何でもよい）。
-//! 地図経路では頂点ごとに変換する。建物の範囲でも接平面（ENU）で近似すると、
-//! 子午線収差で100 mあたり数cmずれるため。
+//! PROJ converts map coordinates and latitude/longitude to ECEF (any CRS that can be expressed as an EPSG code works).
+//! On the map path every vertex is converted. Even within a building, approximating with a tangent plane (ENU)
+//! would be off by a few centimetres per 100 m because of meridian convergence.
 
 use geocentric::{geocentric_to_geodetic, geodetic_to_geocentric};
 
 use crate::georef::Placement;
 use crate::proj::{Context, Kind, Object};
 
-/// WGS84（`EPSG:4978`の楕円体）。
+/// WGS84 (the ellipsoid of `EPSG:4978`).
 const A: f64 = 6_378_137.0;
 const INV_F: f64 = 298.257_223_563;
 
@@ -18,27 +18,27 @@ fn e_sq() -> f64 {
     f * (2.0 - f)
 }
 
-/// 鉛直のCRSがないときに補う標高の基準（EGM2008の標高）。
+/// Height reference used when the CRS has no vertical part (EGM2008 height).
 const DEFAULT_VERTICAL_CRS: &str = "EPSG:3855";
 
-/// 変換、その警告、基準点のECEF（変換できなければ`None`）。
+/// The transformation, its warnings, and the ECEF of the reference point (`None` if it cannot be transformed).
 type Attempt = (Projector, Vec<String>, Option<[f64; 3]>);
 
-/// 局所座標 [m] → ECEF [m]。
+/// Local coordinates [m] → ECEF [m].
 pub struct Projector {
-    /// 入力CRS → `EPSG:4978`。軸順は（東, 北）または（経度, 緯度）にそろえてある。
+    /// Input CRS → `EPSG:4978`. The axis order is normalized to (east, north) or (longitude, latitude).
     pj: Object,
     placement: Placement,
-    /// ENU経路の原点のECEFと基底。
+    /// ECEF origin and basis of the ENU path.
     enu: Option<Frame>,
 }
 
 impl Projector {
-    /// 返り値の2つ目は警告。
+    /// The second return value holds the warnings.
     ///
-    /// point-tilerと同じく、グリッド（ジオイドなど）をcdn.proj.orgから取得してキャッシュする。
-    /// 取得できないと変換そのものが失敗するため、そのときはネットワークを切って作り直し、
-    /// PROJにグリッドを使わない近似の変換を選ばせる（近似になったことは警告する）。
+    /// Like point-tiler, grids (geoids etc.) are downloaded from cdn.proj.org and cached.
+    /// If they cannot be downloaded the transformation itself fails, so it is rebuilt with the network disabled
+    /// to let PROJ pick an approximate transformation that does not use grids (the approximation is reported as a warning).
     pub fn new(placement: &Placement) -> Result<(Self, Vec<String>), String> {
         let reference = match placement {
             Placement::Grid(g) => g.to_map([0.0; 3]),
@@ -50,15 +50,15 @@ impl Projector {
                 (p, w, Some(origin)) => (p, w, origin),
                 (_, _, None) => {
                     return Err(format!(
-                        "座標 {reference:?} を変換できない（CRSの定義域外）。--crs やジオリファレンスを確かめる"
+                        "cannot transform the coordinates {reference:?} (outside the domain of the CRS); check --crs and the georeferencing"
                     ));
                 }
             },
         };
         if let Some(name) = p.last_ballpark() {
             warnings.push(format!(
-                "座標変換（{name}）がグリッドを使わない近似になり、高さや位置が数m以上ずれている可能性がある。\
-                 ネットワークに接続するか、projsyncで必要なグリッドを取得する"
+                "the coordinate transformation ({name}) is an approximation that does not use grids, so heights and positions may be off by several metres or more; \
+                 connect to the network, or fetch the required grids with projsync"
             ));
         }
         if let Placement::Enu(e) = placement {
@@ -67,10 +67,10 @@ impl Projector {
         Ok((p, warnings))
     }
 
-    /// 変換を作り、基準点を変換してみる。基準点を変換できなければ3つ目が`None`。
+    /// Builds the transformation and tries to transform the reference point. The third value is `None` if that fails.
     fn with_network(placement: &Placement, network: bool, reference: [f64; 3]) -> Result<Attempt, String> {
         let mut warnings = Vec::new();
-        let ctx = Context::new().ok_or("PROJのコンテキストを作れない")?;
+        let ctx = Context::new().ok_or("cannot create a PROJ context")?;
         ctx.set_network(network);
         ctx.enable_grid_cache();
         let pj = source_to_ecef(&ctx, placement, &mut warnings)?;
@@ -83,15 +83,15 @@ impl Projector {
         self.pj.trans(p)
     }
 
-    /// 直前の変換がグリッドを使わない近似（ballpark）だったら、その名前。
+    /// The name of the last transformation if it was an approximation that does not use grids (ballpark).
     fn last_ballpark(&self) -> Option<String> {
-        // 候補が1つだけの変換では直前の操作がなく、変換自身を見る
+        // A transformation with a single candidate has no last-used operation, so look at the transformation itself
         let last = self.pj.last_used_operation();
         let op = last.as_ref().unwrap_or(&self.pj);
         op.has_ballpark_transformation().then(|| op.name())
     }
 
-    /// 局所座標 [m] → ECEF [m]。地図座標を変換できなければ、その地図座標を返す。
+    /// Local coordinates [m] → ECEF [m]. If the map coordinates cannot be transformed, returns those map coordinates.
     pub fn to_ecef(&self, p: [f64; 3]) -> Result<[f64; 3], [f64; 3]> {
         match (&self.placement, &self.enu) {
             (Placement::Enu(e), Some(frame)) => Ok(frame.to_ecef(e.to_enu(p))),
@@ -99,11 +99,11 @@ impl Projector {
                 let map = g.to_map(p);
                 self.trans(map).ok_or(map)
             }
-            (Placement::Enu(_), None) => unreachable!("ENUのフレームはnewで作る"),
+            (Placement::Enu(_), None) => unreachable!("the ENU frame is created in new"),
         }
     }
 
-    /// 点`c`の近くで、局所座標の向きを`frame`の座標の向きへ移す回転（列が局所x・y・z軸の行き先）。
+    /// The rotation near point `c` that maps the orientation of local coordinates to that of `frame` (the columns are where the local x, y and z axes go).
     pub fn rotation_at(&self, c: [f64; 3], frame: &Frame) -> Result<[[f64; 3]; 3], [f64; 3]> {
         let o = frame.to_local(self.to_ecef(c)?);
         let axis = |i: usize| {
@@ -115,25 +115,26 @@ impl Projector {
     }
 }
 
-/// 入力CRS→`EPSG:4978`の変換を作る。鉛直のCRSがなければEGM2008の標高とみなす。
+/// Builds the transformation input CRS → `EPSG:4978`. If there is no vertical CRS, heights are treated as EGM2008 heights.
 fn source_to_ecef(ctx: &Context, placement: &Placement, warnings: &mut Vec<String>) -> Result<Object, String> {
     let (crs, want_projected) = match placement {
         Placement::Grid(g) => (g.crs.as_str(), true),
         Placement::Enu(e) => (e.crs.as_str(), false),
     };
-    let mut src = ctx.create(crs).ok_or_else(|| format!("CRSを解釈できない（{crs}）。--crs EPSG:xxxx で指定する"))?;
+    let mut src =
+        ctx.create(crs).ok_or_else(|| format!("cannot parse the CRS ({crs}); specify it with --crs EPSG:xxxx"))?;
     let kind = src.kind();
     let horizontal = if kind == Kind::Compound { src.sub_crs(0).map_or(Kind::Other, |h| h.kind()) } else { kind };
     let geographic = matches!(horizontal, Kind::Geographic2d | Kind::Geographic3d);
     let ok = if want_projected { horizontal == Kind::Projected } else { geographic };
     if !ok {
         let what = if want_projected {
-            "地図座標のCRSには投影座標系"
+            "a projected CRS is required for map coordinates"
         } else {
-            "緯度・経度のCRSには地理座標系"
+            "a geographic CRS is required for latitude and longitude"
         };
         return Err(format!(
-            "{crs}は使えない。{what}（例: {}）を指定する",
+            "{crs} cannot be used: {what} (e.g. {})",
             if want_projected { "EPSG:32654" } else { "EPSG:4326" }
         ));
     }
@@ -141,21 +142,21 @@ fn source_to_ecef(ctx: &Context, placement: &Placement, warnings: &mut Vec<Strin
         let compound = ctx
             .create(DEFAULT_VERTICAL_CRS)
             .and_then(|vertical| ctx.compound_crs(&format!("{crs} + EGM2008 height"), &src, &vertical))
-            .ok_or_else(|| format!("{crs}にEGM2008の標高を組み合わせられない"))?;
+            .ok_or_else(|| format!("cannot combine {crs} with EGM2008 heights"))?;
         src = compound;
         warnings.push(format!(
-            "CRS（{crs}）に高さの基準がないため、高さをEGM2008の標高とみなした。\
-             高さの基準を含むCRS（例: EPSG:6677+6695）を --crs で指定すると、その国のジオイドを使う"
+            "the CRS ({crs}) has no height reference, so heights are treated as EGM2008 heights; \
+             specify a CRS that includes a height reference (e.g. EPSG:6677+6695) with --crs to use that country's geoid"
         ));
     }
     let op = ctx
         .create("EPSG:4978")
         .and_then(|dst| ctx.crs_to_crs(&src, &dst))
-        .ok_or_else(|| format!("{crs}から地心座標への変換を作れない"))?;
-    op.normalize_for_visualization().ok_or_else(|| format!("{crs}の軸順をそろえられない"))
+        .ok_or_else(|| format!("cannot build a transformation from {crs} to geocentric coordinates"))?;
+    op.normalize_for_visualization().ok_or_else(|| format!("cannot normalize the axis order of {crs}"))
 }
 
-/// ECEF → [緯度, 経度, 楕円体高]。
+/// ECEF → [latitude, longitude, ellipsoidal height].
 fn to_geodetic(p: [f64; 3]) -> [f64; 3] {
     let (lon, lat, h) = geocentric_to_geodetic(A, e_sq(), p[0], p[1], p[2]);
     [lat, lon, h]
@@ -166,11 +167,11 @@ fn geodetic(lat: f64, lon: f64, h: f64) -> [f64; 3] {
     [x, y, z]
 }
 
-/// ECEFの点を原点とする東・北・上の直交フレーム。
+/// An orthogonal east-north-up frame with an ECEF point as its origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     origin: [f64; 3],
-    /// 東・北・上の単位ベクトル（ECEF）。
+    /// Unit vectors of east, north and up (ECEF).
     basis: [[f64; 3]; 3],
 }
 
@@ -199,7 +200,7 @@ impl Frame {
         self.basis.map(|b| dot(b, d))
     }
 
-    /// フレーム座標→ECEFの4×4行列（列優先。tileset.jsonの`transform`）。
+    /// 4×4 matrix from frame coordinates to ECEF (column-major; the `transform` of tileset.json).
     pub fn transform(&self) -> [f64; 16] {
         let [e, n, u] = self.basis;
         let o = self.origin;
@@ -220,7 +221,7 @@ fn normalize(a: [f64; 3]) -> [f64; 3] {
     a.map(|v| v / l)
 }
 
-/// グラム・シュミットの直交化。
+/// Gram–Schmidt orthogonalization.
 fn orthonormalize([x, y, _]: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let x = normalize(x);
     let d = dot(y, x);
@@ -229,7 +230,7 @@ fn orthonormalize([x, y, _]: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     [x, y, z]
 }
 
-/// 回転（列ベクトルの配列）をベクトルに掛ける。
+/// Applies a rotation (an array of column vectors) to a vector.
 pub fn rotate(r: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|i| r[0][i] * v[0] + r[1][i] * v[1] + r[2][i] * v[2])
 }
@@ -239,7 +240,7 @@ mod tests {
     use super::*;
     use crate::georef::{EnuPlacement, GridPlacement};
 
-    // 国土地理院 測量計算サイト（testdata/handmade/expected.json）
+    // Geospatial Information Authority of Japan (GSI) survey calculation site (testdata/handmade/expected.json)
     const LAT: f64 = 35.681236;
     const LON: f64 = 139.767125;
     const EAST: f64 = -5992.9196;
@@ -266,18 +267,18 @@ mod tests {
 
     #[test]
     fn grid_known_point_matches_gsi() {
-        // JGD2011 / 平面直角座標系IX系 + JGD2011の標高
+        // JGD2011 / Japan Plane Rectangular CS IX + JGD2011 height
         let (p, warnings) = Projector::new(&grid("EPSG:10170", [EAST, NORTH, 3.0])).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let got = p.to_ecef([0.0, 0.0, 0.0]).unwrap();
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
-        // 国土地理院の値の丸め（1e-6度≈0.1 m）を踏まえる
+        // Allows for the rounding of the GSI values (1e-6 degrees ≈ 0.1 m)
         assert!(dist(got, want) < 0.15, "{}", dist(got, want));
     }
 
     #[test]
     fn enu_origin_is_at_geodetic_point() {
-        // JGD2011の経緯度 + JGD2011の標高
+        // JGD2011 latitude/longitude + JGD2011 height
         let (p, warnings) = Projector::new(&enu("EPSG:6697", LAT, LON, 3.0)).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let want = geodetic(LAT, LON, 3.0 + GEOID_2024);
@@ -289,13 +290,13 @@ mod tests {
         let (p, warnings) = Projector::new(&grid("EPSG:6677", [EAST, NORTH, 3.0])).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("EGM2008"));
-        // EGM2008とJPGEO2024の差は東京で1 m未満
+        // The difference between EGM2008 and JPGEO2024 is under 1 m in Tokyo
         let h = to_geodetic(p.to_ecef([0.0; 3]).unwrap())[2];
         assert!((h - (3.0 + GEOID_2024)).abs() < 1.0, "{h}");
     }
 
-    /// GeographicLib GeoConvert(1)の例: 38n 444500 3688500 → 33:20:03.25N 044:24:13.06E
-    /// （https://geographiclib.sourceforge.io/C++/doc/GeoConvert.1.html）。秒の丸め（0.005″≈0.15 m）を踏まえる。
+    /// Example from GeographicLib GeoConvert(1): 38n 444500 3688500 → 33:20:03.25N 044:24:13.06E
+    /// (https://geographiclib.sourceforge.io/C++/doc/GeoConvert.1.html). Allows for the rounding of the seconds (0.005″ ≈ 0.15 m).
     #[test]
     fn utm_matches_geographiclib() {
         let (p, _) = Projector::new(&grid("EPSG:32638", [444_500.0, 3_688_500.0, 0.0])).unwrap();
@@ -305,8 +306,8 @@ mod tests {
         assert!((lon - dms(44.0, 24.0, 13.06)).abs() < 0.006 / 3600.0, "{lon}");
     }
 
-    /// GeographicLibのテストデータ GeoidHeights.dat（NGAの球面調和関数の計算値）の1行:
-    /// 47.2612 8.32186 → EGM2008 48.0227 m。PROJは2.5′格子を補間するため、数cmの差を許す。
+    /// One line of GeographicLib's test data GeoidHeights.dat (values computed from NGA's spherical harmonics):
+    /// 47.2612 8.32186 → EGM2008 48.0227 m. PROJ interpolates a 2.5′ grid, so a difference of a few centimetres is allowed.
     #[test]
     fn egm2008_matches_geographiclib() {
         let (p, warnings) = Projector::new(&enu("EPSG:4326", 47.2612, 8.32186, 0.0)).unwrap();
@@ -336,8 +337,8 @@ mod tests {
 
     #[test]
     fn rotation_in_grid_includes_meridian_convergence() {
-        // IX系の既知点（中央子午線の西）では子午線収差が0.038616667°。
-        // 地図の東（局所+X）は、真東から反時計回り（北寄り）にその角度だけ回っている
+        // At the known point in zone IX (west of the central meridian) the meridian convergence is 0.038616667°.
+        // Map east (local +X) is rotated counterclockwise (toward north) from true east by that angle
         let (p, _) = Projector::new(&grid("EPSG:10170", [EAST, NORTH, 3.0])).unwrap();
         let frame = Frame::at_ecef(p.to_ecef([0.0; 3]).unwrap());
         let r = p.rotation_at([0.0; 3], &frame).unwrap();
