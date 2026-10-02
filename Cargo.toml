@@ -5,6 +5,11 @@ members = ["crates/ifc-tiler"]
 [workspace.package]
 edition = "2024"
 rust-version = "1.95"
+repository = "https://github.com/nokonoko1203/ifc-tiler"
 
 [profile.release]
 debug = false
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

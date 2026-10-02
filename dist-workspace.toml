@@ -1,0 +1,28 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.33.0"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+install-path = "CARGO_HOME"
+install-updater = false
+# Release binaries link PROJ and SQLite statically (grids cannot be used)
+features = ["bundled"]
+# Temporary: build all targets on this PR to check them before the first release
+pr-run-mode = "upload"
+
+# By default it is cross-compiled with cargo-zigbuild, which is fragile for the CMake build of PROJ
+[dist.github-custom-runners]
+aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
+
+# Building PROJ needs the sqlite3 executable, which the Windows runner does not have
+[dist.dependencies.chocolatey]
+sqlite = { version = "3.53.4", targets = ["x86_64-pc-windows-msvc"] }
+
+# Pin actions to commits (checkout v6.1.0, upload-artifact v7.0.1, download-artifact v8.0.1)
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803"
+"actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"

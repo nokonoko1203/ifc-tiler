@@ -21,6 +21,13 @@ fn e_sq() -> f64 {
 /// Height reference used when the CRS has no vertical part (EGM2008 height)
 const DEFAULT_VERTICAL_CRS: &str = "EPSG:3855";
 
+/// How to get grids, appended to the approximation warning
+/// The bundled PROJ is built without curl and libtiff, so it can neither download nor read grids
+#[cfg(not(feature = "bundled"))]
+const GRID_HINT: &str = "connect to the network, or fetch the required grids with projsync";
+#[cfg(feature = "bundled")]
+const GRID_HINT: &str = "this build cannot use grids; to use them, build from source with a system PROJ";
+
 /// The transformation, its warnings, and the ECEF of the reference point (`None` if it cannot be transformed)
 type Attempt = (Projector, Vec<String>, Option<[f64; 3]>);
 
@@ -57,8 +64,7 @@ impl Projector {
         };
         if let Some(name) = p.last_ballpark() {
             warnings.push(format!(
-                "the coordinate transformation ({name}) is an approximation that does not use grids, so heights and positions may be off by several metres or more; \
-                 connect to the network, or fetch the required grids with projsync"
+                "the coordinate transformation ({name}) is an approximation that does not use grids, so heights and positions may be off by several metres or more; {GRID_HINT}"
             ));
         }
         if let Placement::Enu(e) = placement {
