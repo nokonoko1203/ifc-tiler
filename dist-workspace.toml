@@ -10,6 +10,8 @@ install-path = "CARGO_HOME"
 install-updater = false
 # Release binaries link PROJ and SQLite statically (grids cannot be used)
 features = ["bundled"]
+# Temporary: build all targets on this PR to check them before the first release
+pr-run-mode = "upload"
 
 # By default it is cross-compiled with cargo-zigbuild, which is fragile for the CMake build of PROJ
 [dist.github-custom-runners]
