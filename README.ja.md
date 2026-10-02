@@ -20,6 +20,24 @@ ifc-tilerは、ジオリファレンスをもとに頂点ごとに地図座標�
 
 ## インストール
 
+### ビルド済みバイナリ
+
+[Releases](https://github.com/nokonoko1203/ifc-tiler/releases)に、macOS（Apple Silicon / Intel）、Linux（x86_64 / aarch64）、Windows（x86_64）のバイナリを置いています。PROJとSQLiteを静的リンクしているので、RustもPROJも要りません。
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nokonoko1203/ifc-tiler/releases/latest/download/ifc-tiler-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/nokonoko1203/ifc-tiler/releases/latest/download/ifc-tiler-installer.ps1 | iex"
+```
+
+ビルド済みバイナリは、ジオイドなどのグリッドを使えません（同梱のPROJにグリッドの取得と読み込みの機能がありません）。グリッドが必要な変換ではグリッドを使わない近似になり、`warning:`で知らせます。標高から楕円体高への変換にはジオイド（CRSに高さの基準がなければEGM2008）を使うので、ビルド済みバイナリではほぼすべての入力で、ジオイド高が足されず高さがその分（東京付近で約37 m）ずれます。正確な高さが必要な場合は、次の手順でソースからビルドしてください。
+
+### ソースからビルドする
+
 必要なもの:
 
 - Rust 1.95。`rust-toolchain.toml`で版を固定しているので、[rustup](https://rustup.rs/)があれば自動で入ります

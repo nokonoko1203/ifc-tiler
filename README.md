@@ -20,6 +20,24 @@ To view the output, use a viewer that supports 3D Tiles 1.1 (`EXT_mesh_features`
 
 ## Installation
 
+### Prebuilt binaries
+
+[Releases](https://github.com/nokonoko1203/ifc-tiler/releases) has binaries for macOS (Apple Silicon / Intel), Linux (x86_64 / aarch64) and Windows (x86_64). PROJ and SQLite are statically linked, so neither Rust nor PROJ is needed.
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nokonoko1203/ifc-tiler/releases/latest/download/ifc-tiler-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/nokonoko1203/ifc-tiler/releases/latest/download/ifc-tiler-installer.ps1 | iex"
+```
+
+The prebuilt binaries cannot use grids such as geoid models (the bundled PROJ can neither download nor read them). Transformations that need grids fall back to an approximation without grids, reported with `warning:`. Elevations are converted to ellipsoidal heights with a geoid model (EGM2008 when the CRS has no height reference), so in the prebuilt binaries this applies to almost every input: the geoid height is not added and heights are off by that amount (about 37 m around Tokyo). If you need accurate heights, build from source as described below.
+
+### Building from source
+
 Requirements:
 
 - Rust 1.95. The version is pinned in `rust-toolchain.toml`, so [rustup](https://rustup.rs/) installs it automatically
